@@ -16,6 +16,13 @@ st.markdown("""
     .big-number { font-size: 64px; font-weight: bold; text-align: center; margin-bottom: 0px; }
     .est-time { font-size: 24px; text-align: center; color: #aaaaaa; margin-top: -10px; margin-bottom: 20px; }
     .zone-header { color: #4CAF50; font-size: 32px; margin-top: 20px; margin-bottom: 10px; border-bottom: 2px solid #333; padding-bottom: 5px; }
+    
+    /* NEW: Ticker Styling */
+    .ticker-wrap { width: 100%; background-color: #111111; padding: 15px 0; border-top: 4px solid #ff9800; border-bottom: 4px solid #ff9800; margin-top: 40px; margin-bottom: 40px;}
+    .ticker-text { font-size: 36px; font-weight: bold; color: #ffffff; }
+    .kudos-text { color: #FFD700; } /* Gold */
+    .alert-text { color: #FF5252; } /* Red */
+    
     div[data-testid="stButton"] > button { height: 60px; width: 100%; font-size: 24px; }
     </style>
 """, unsafe_allow_html=True)
@@ -24,6 +31,7 @@ st.markdown("""
 TASKS_FILE = "tasks.csv"
 COUNTS_FILE = "counts.csv"
 ORDERS_FILE = "orders.csv"
+TICKER_FILE = "ticker.csv"
 
 # Timezone helper for Edmonton (UTC-6)
 def get_yeg_now():
@@ -32,6 +40,7 @@ def get_yeg_now():
 # Initialize files
 for f, cols in {TASKS_FILE: ["Task_ID", "Task_Detail", "Status", "Priority", "Zone", "Submitted_By", "Time_Submitted", "Closed_By", "Time_Closed"], 
                 ORDERS_FILE: ["Order_ID", "Order_Detail", "Status"],
+                TICKER_FILE: ["Message_ID", "Message", "Type"],
                 COUNTS_FILE: ["Grocery", "Frozen", "Staff"]}.items():
     if not os.path.exists(f):
         pd.DataFrame(columns=cols).to_csv(f, index=False)
@@ -40,8 +49,11 @@ for f, cols in {TASKS_FILE: ["Task_ID", "Task_Detail", "Status", "Priority", "Zo
 def load_tasks(): return pd.read_csv(TASKS_FILE)
 def load_counts(): return pd.read_csv(COUNTS_FILE)
 def load_orders(): return pd.read_csv(ORDERS_FILE)
+def load_ticker(): return pd.read_csv(TICKER_FILE)
+
 def save_tasks(df): df.to_csv(TASKS_FILE, index=False)
 def save_orders(df): df.to_csv(ORDERS_FILE, index=False)
+def save_ticker(df): df.to_csv(TICKER_FILE, index=False)
 
 def delete_task(task_id_to_close, closer_name):
     df = load_tasks()
@@ -62,7 +74,8 @@ def delete_order(order_id_to_close):
 tasks = load_tasks()
 counts = load_counts()
 orders = load_orders()
-zones_list = ["General", "Aisles 1-5", "Aisles 6-10", "Backroom", "Cooler/Freezer", "Front End"]
+ticker_msgs = load_ticker()
+zones_list = ["General", "Aisle 1", "Aisle 2", "Aisle 3", "Aisle 4", "Aisle 5", "Aisle 6", "Aisle 7", "Aisle 8", "Receiving", "Freezer", "Click and Collect", "Bakery", "Outside"]
 
 with st.sidebar:
     st.header("📱 Control Panel")
@@ -74,17 +87,21 @@ with st.sidebar:
     
     if is_admin:
         st.warning("ADMIN MODE")
-        if st.button("🚨 RESET BOARD"):
+        if st.button("🚨 CLEAR TICKER ONLY"):
+            pd.DataFrame(columns=ticker_msgs.columns).to_csv(TICKER_FILE, index=False)
+            st.rerun()
+        if st.button("🚨 RESET ENTIRE BOARD"):
             pd.DataFrame(columns=tasks.columns).to_csv(TASKS_FILE, index=False)
             pd.DataFrame(columns=orders.columns).to_csv(ORDERS_FILE, index=False)
+            pd.DataFrame(columns=ticker_msgs.columns).to_csv(TICKER_FILE, index=False)
             st.rerun()
     st.divider()
 
     if st.button("Push Daily Routine", type="primary"):
         routine_tasks = [
             {"Detail": "Morning Temp Checks", "Zone": "General", "Priority": "High"},
-            {"Detail": "Face Baking Aisle", "Zone": "Aisles 6-10", "Priority": "Routine"},
-            {"Detail": "Bale / Cardboard", "Zone": "Backroom", "Priority": "Routine"}
+            {"Detail": "Face Baking Aisle", "Zone": "Aisle 6", "Priority": "Routine"},
+            {"Detail": "Bale / Cardboard", "Zone": "Receiving", "Priority": "Routine"}
         ]
         now_str = get_yeg_now().strftime("%Y-%m-%d %H:%M:%S")
         curr_id = 0 if tasks.empty else tasks["Task_ID"].max()
@@ -94,16 +111,36 @@ with st.sidebar:
         save_tasks(pd.concat([tasks, pd.DataFrame(new_rows)], ignore_index=True))
         st.rerun()
 
+    # NEW: Broadcast Marquee Input
+    with st.form("add_ticker_form", clear_on_submit=True):
+        st.subheader("📣 Push Broadcast")
+        msg_type = st.selectbox("Type:", ["Kudos 🌟", "Alert 📢"])
+        msg_text = st.text_input("Message:")
+        if st.form_submit_button("Send to Ticker") and msg_text.strip():
+            new_m_id = 1 if ticker_msgs.empty else ticker_msgs["Message_ID"].max() + 1
+            new_msg = pd.DataFrame([{"Message_ID": new_m_id, "Message": msg_text.strip(), "Type": msg_type}])
+            save_ticker(pd.concat([ticker_msgs, new_msg], ignore_index=True))
+            st.rerun()
+
     with st.form("add_task", clear_on_submit=True):
         st.subheader("Add Task")
         p = st.selectbox("Priority:", ["Routine", "High", "Urgent"])
         z = st.selectbox("Zone:", zones_list)
         d = st.text_area("Detail:")
-        if st.form_submit_button("Push"):
+        if st.form_submit_button("Push Task"):
             now_str = get_yeg_now().strftime("%Y-%m-%d %H:%M:%S")
             new_id = 1 if tasks.empty else tasks["Task_ID"].max() + 1
             new_row = pd.DataFrame([{"Task_ID": new_id, "Task_Detail": d, "Status": "Open", "Priority": p, "Zone": z, "Submitted_By": active_user, "Time_Submitted": now_str}])
             save_tasks(pd.concat([load_tasks(), new_row], ignore_index=True))
+            st.rerun()
+
+    with st.form("add_order_form", clear_on_submit=True):
+        st.subheader("Log Special Order")
+        order_desc = st.text_area("Item/Customer/Date:")
+        if st.form_submit_button("Push Order") and order_desc.strip():
+            new_o_id = 1 if orders.empty else orders["Order_ID"].max() + 1
+            new_o_row = pd.DataFrame([{"Order_ID": new_o_id, "Order_Detail": order_desc.strip(), "Status": "Open"}])
+            save_orders(pd.concat([orders, new_o_row], ignore_index=True))
             st.rerun()
 
     with st.form("truck_info"):
@@ -120,6 +157,8 @@ with st.sidebar:
 def live_tv_board():
     local_tasks = load_tasks()
     local_counts = load_counts()
+    local_orders = load_orders()
+    local_ticker = load_ticker()
     
     now = get_yeg_now()
     
@@ -137,6 +176,7 @@ def live_tv_board():
     st.markdown(f"<div class='est-time'>Est. Completion: {est_hours} hrs ({staff} staff)</div>", unsafe_allow_html=True)
     st.markdown("---")
     
+    # --- TASKS BY ZONE ---
     open_t = local_tasks[local_tasks["Status"] == "Open"].copy()
     if open_t.empty:
         st.success("Floor is clear.")
@@ -145,12 +185,43 @@ def live_tv_board():
         open_t["p_rank"] = open_t["Priority"].map(p_map)
         open_t = open_t.sort_values(["p_rank", "Task_ID"])
         
-        display_order = ["General", "Front End", "Aisles 1-5", "Aisles 6-10", "Cooler/Freezer", "Backroom"]
+        display_order = ["General", "Aisle 1", "Aisle 2", "Aisle 3", "Aisle 4", "Aisle 5", "Aisle 6", "Aisle 7", "Aisle 8", "Bakery", "Freezer", "Receiving", "Click and Collect", "Outside"]
         for z in [z for z in display_order if z in open_t["Zone"].unique()]:
             st.markdown(f"<div class='zone-header'>📍 {z}</div>", unsafe_allow_html=True)
             for _, row in open_t[open_t["Zone"] == z].iterrows():
                 cols = st.columns([0.9, 0.1])
                 cols[0].markdown(f"<div class='task-{row['Priority'].lower()}'>{row['Task_Detail']}</div>", unsafe_allow_html=True)
                 cols[1].button("❌", key=f"t_{row['Task_ID']}", on_click=delete_task, args=(row['Task_ID'], active_user))
+
+    st.markdown("---")
+
+    # --- SPECIAL ORDERS ---
+    st.subheader("📦 Incoming Special Orders")
+    open_orders = local_orders[local_orders["Status"] == "Open"]
+
+    if open_orders.empty:
+        st.info("No special orders pending.")
+    else:
+        for _, row in open_orders.iterrows():
+            cols = st.columns([0.9, 0.1])
+            cols[0].markdown(f"<div class='order-box'>{row['Order_Detail']}</div>", unsafe_allow_html=True)
+            cols[1].button("❌", key=f"o_{row['Order_ID']}", on_click=delete_order, args=(row['Order_ID'],))
+
+    # --- NEWS TICKER / MARQUEE ---
+    if not local_ticker.empty:
+        ticker_string = ""
+        for _, row in local_ticker.iterrows():
+            # Apply styling based on type
+            if "Kudos" in row['Type']:
+                ticker_string += f"<span class='kudos-text'>🌟 {row['Message']}</span> &nbsp;&nbsp;&nbsp;&nbsp; | &nbsp;&nbsp;&nbsp;&nbsp; "
+            else:
+                ticker_string += f"<span class='alert-text'>📢 {row['Message']}</span> &nbsp;&nbsp;&nbsp;&nbsp; | &nbsp;&nbsp;&nbsp;&nbsp; "
+                
+        # The HTML Marquee component
+        st.markdown(f"""
+            <div class='ticker-wrap'>
+                <marquee class='ticker-text' scrollamount='8'>{ticker_string}</marquee>
+            </div>
+        """, unsafe_allow_html=True)
 
 live_tv_board()
