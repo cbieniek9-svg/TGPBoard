@@ -1,8 +1,7 @@
 import streamlit as st
 import pandas as pd
 import os
-from datetime import datetime
-import pytz # <-- New tool for Edmonton time
+from datetime import datetime, timedelta, timezone
 
 # --- PAGE CONFIGURATION ---
 st.set_page_config(page_title="Center Store Communication Board", layout="wide", initial_sidebar_state="expanded")
@@ -26,12 +25,16 @@ TASKS_FILE = "tasks.csv"
 COUNTS_FILE = "counts.csv"
 ORDERS_FILE = "orders.csv"
 
-# Initialize files if they don't exist
+# Timezone helper for Edmonton (UTC-6)
+def get_yeg_now():
+    return datetime.now(timezone.utc) - timedelta(hours=6)
+
+# Initialize files
 for f, cols in {TASKS_FILE: ["Task_ID", "Task_Detail", "Status", "Priority", "Zone", "Submitted_By", "Time_Submitted", "Closed_By", "Time_Closed"], 
                 ORDERS_FILE: ["Order_ID", "Order_Detail", "Status"],
                 COUNTS_FILE: ["Grocery", "Frozen", "Staff"]}.items():
     if not os.path.exists(f):
-        pd.DataFrame(columns=cols if isinstance(cols, list) else None).to_csv(f, index=False)
+        pd.DataFrame(columns=cols).to_csv(f, index=False)
         if f == COUNTS_FILE: pd.DataFrame({"Grocery": [0], "Frozen": [0], "Staff": [1]}).to_csv(f, index=False)
 
 def load_tasks(): return pd.read_csv(TASKS_FILE)
@@ -42,8 +45,7 @@ def save_orders(df): df.to_csv(ORDERS_FILE, index=False)
 
 def delete_task(task_id_to_close, closer_name):
     df = load_tasks()
-    local_tz = pytz.timezone("America/Edmonton")
-    now_str = datetime.now(local_tz).strftime("%Y-%m-%d %H:%M:%S")
+    now_str = get_yeg_now().strftime("%Y-%m-%d %H:%M:%S")
     df["Closed_By"] = df["Closed_By"].astype("object")
     df["Time_Closed"] = df["Time_Closed"].astype("object")
     df.loc[df["Task_ID"] == task_id_to_close, "Status"] = "Closed"
@@ -66,52 +68,44 @@ with st.sidebar:
     st.header("📱 Control Panel")
     active_user = st.selectbox("👤 User:", ["Chris", "Ashley", "Luke", "Chandler"])
     
-    # --- SUPERVISOR SECTION ---
     st.divider()
     admin_pin = st.text_input("Admin PIN:", type="password")
-    is_admin = (admin_pin == "0000") # Change '0000' to your preferred PIN
+    is_admin = (admin_pin == "0000") 
     
     if is_admin:
-        st.warning("STAFF CONTROLS ACTIVE")
-        if st.button("🚨 WIPE & RESET BOARD"):
+        st.warning("ADMIN MODE")
+        if st.button("🚨 RESET BOARD"):
             pd.DataFrame(columns=tasks.columns).to_csv(TASKS_FILE, index=False)
             pd.DataFrame(columns=orders.columns).to_csv(ORDERS_FILE, index=False)
             st.rerun()
-    
     st.divider()
 
-    # 1. Quick Actions
     if st.button("Push Daily Routine", type="primary"):
         routine_tasks = [
             {"Detail": "Morning Temp Checks", "Zone": "General", "Priority": "High"},
             {"Detail": "Face Baking Aisle", "Zone": "Aisles 6-10", "Priority": "Routine"},
             {"Detail": "Bale / Cardboard", "Zone": "Backroom", "Priority": "Routine"}
         ]
-        local_tz = pytz.timezone("America/Edmonton")
-        now_str = datetime.now(local_tz).strftime("%Y-%m-%d %H:%M:%S")
+        now_str = get_yeg_now().strftime("%Y-%m-%d %H:%M:%S")
         curr_id = 0 if tasks.empty else tasks["Task_ID"].max()
-        new_tasks = []
+        new_rows = []
         for i, t in enumerate(routine_tasks):
-            new_tasks.append({"Task_ID": curr_id+i+1, "Task_Detail": t["Detail"], "Status": "Open", "Priority": t["Priority"], "Zone": t["Zone"], "Submitted_By": active_user, "Time_Submitted": now_str})
-        tasks = pd.concat([tasks, pd.DataFrame(new_tasks)], ignore_index=True)
-        save_tasks(tasks)
+            new_rows.append({"Task_ID": curr_id+i+1, "Task_Detail": t["Detail"], "Status": "Open", "Priority": t["Priority"], "Zone": t["Zone"], "Submitted_By": active_user, "Time_Submitted": now_str})
+        save_tasks(pd.concat([tasks, pd.DataFrame(new_rows)], ignore_index=True))
         st.rerun()
 
-    # 2. Manual Task
     with st.form("add_task", clear_on_submit=True):
         st.subheader("Add Task")
         p = st.selectbox("Priority:", ["Routine", "High", "Urgent"])
         z = st.selectbox("Zone:", zones_list)
         d = st.text_area("Detail:")
         if st.form_submit_button("Push"):
-            local_tz = pytz.timezone("America/Edmonton")
-            now_str = datetime.now(local_tz).strftime("%Y-%m-%d %H:%M:%S")
+            now_str = get_yeg_now().strftime("%Y-%m-%d %H:%M:%S")
             new_id = 1 if tasks.empty else tasks["Task_ID"].max() + 1
             new_row = pd.DataFrame([{"Task_ID": new_id, "Task_Detail": d, "Status": "Open", "Priority": p, "Zone": z, "Submitted_By": active_user, "Time_Submitted": now_str}])
             save_tasks(pd.concat([load_tasks(), new_row], ignore_index=True))
             st.rerun()
 
-    # 3. Truck Info
     with st.form("truck_info"):
         st.subheader("Truck & Staff")
         g = st.number_input("Grocery:", value=int(counts["Grocery"].iloc[0]))
@@ -126,43 +120,8 @@ with st.sidebar:
 def live_tv_board():
     local_tasks = load_tasks()
     local_counts = load_counts()
-    local_orders = load_orders()
     
-    # Edmonton Clock
-    edmonton_tz = pytz.timezone("America/Edmonton")
-    now = datetime.now(edmonton_tz)
+    now = get_yeg_now()
     
     st.markdown(f"<h1 style='text-align: center; color: #ffffff; margin-bottom: 0px;'>Center Store Communication Board</h1>", unsafe_allow_html=True)
-    st.markdown(f"<h3 style='text-align: center; color: #ff9800; margin-top: 0px;'>{now.strftime('%A, %B %d')} | {now.strftime('%I:%M %p')}</h3>", unsafe_allow_html=True)
-    st.markdown("---")
-
-    # Math
-    total = local_counts['Grocery'].iloc[0] + local_counts['Frozen'].iloc[0]
-    staff = local_counts['Staff'].iloc[0]
-    est_hours = round(total / (staff * 60), 1) if total > 0 else 0
-    
-    c1, c2 = st.columns(2)
-    c1.markdown(f"<div class='big-number' style='color: #4CAF50;'>Grocery: {local_counts['Grocery'].iloc[0]}</div>", unsafe_allow_html=True)
-    c2.markdown(f"<div class='big-number' style='color: #2196F3;'>Frozen: {local_counts['Frozen'].iloc[0]}</div>", unsafe_allow_html=True)
-    st.markdown(f"<div class='est-time'>Est. Completion: {est_hours} hrs ({staff} staff)</div>", unsafe_allow_html=True)
-
-    st.markdown("---")
-    
-    # Tasks by Zone
-    open_t = local_tasks[local_tasks["Status"] == "Open"].copy()
-    if open_t.empty:
-        st.success("Floor is clear.")
-    else:
-        p_map = {"Urgent": 1, "High": 2, "Routine": 3}
-        open_t["p_rank"] = open_t["Priority"].map(p_map)
-        open_t = open_t.sort_values(["p_rank", "Task_ID"])
-        
-        display_order = ["General", "Front End", "Aisles 1-5", "Aisles 6-10", "Cooler/Freezer", "Backroom"]
-        for z in [z for z in display_order if z in open_t["Zone"].unique()]:
-            st.markdown(f"<div class='zone-header'>📍 {z}</div>", unsafe_allow_html=True)
-            for _, row in open_t[open_t["Zone"] == z].iterrows():
-                cols = st.columns([0.9, 0.1])
-                cols[0].markdown(f"<div class='task-{row['Priority'].lower()}'>{row['Task_Detail']}</div>", unsafe_allow_html=True)
-                cols[1].button("❌", key=f"t_{row['Task_ID']}", on_click=delete_task, args=(row['Task_ID'], active_user))
-
-live_tv_board()
+    st.markdown(f"<h3 style='text-align: center; color: #ff9800; margin-top:
