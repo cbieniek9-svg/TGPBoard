@@ -30,7 +30,7 @@ TASKS_FILE = "tasks.csv"
 COUNTS_FILE = "counts.csv"
 ORDERS_FILE = "orders.csv"
 TICKER_FILE = "ticker.csv"
-LOGS_FILE = "logs.csv" # NEW: Captain's Log Database
+LOGS_FILE = "logs.csv"
 
 def get_yeg_now():
     return datetime.now(timezone.utc) - timedelta(hours=6)
@@ -104,7 +104,6 @@ with st.sidebar:
             
     st.divider()
 
-    # NEW: LIVE SOP & TRAINING HUB
     with st.expander("📚 SOP & Training Hub"):
         st.markdown("**📦 Stocking Standards**\n1. Always face left-to-right.\n2. Minimum 2 units deep on all faces.\n3. Cardboard immediately into buggies, not on floor.")
         st.markdown("**🛑 Safety Protocols**\n1. Never leave a glass spill unattended. Call for cleanup.\n2. Use 3 points of contact on ladders.\n3. Baler doors must remain locked when not in use.")
@@ -161,9 +160,8 @@ with st.sidebar:
             pd.DataFrame({"Grocery": [g], "Frozen": [f], "Staff": [s]}).to_csv(COUNTS_FILE, index=False)
             st.rerun()
 
-    # NEW: CAPTAIN'S LOG FORM
-    with st.form("captains_log", clear_on_submit=True):
-        st.subheader("📝 Captain's Shift Log")
+    with st.form("shift_log", clear_on_submit=True):
+        st.subheader("📝 Shift Log")
         shift_type = st.selectbox("Shift:", ["Morning", "Mid-Shift", "Close"])
         rating = st.select_slider("Shift Pulse:", options=["🔴 Brutal", "🟡 Grinding", "🟢 Smooth"])
         notes = st.text_area("Handoff Notes & Issues:")
@@ -175,7 +173,6 @@ with st.sidebar:
             st.rerun()
 
 # --- MAIN DASHBOARD ---
-@st.fragment(run_every="2s")
 def live_tv_board():
     local_tasks = load_tasks()
     local_counts = load_counts()
@@ -235,4 +232,20 @@ def live_tv_board():
         if local_logs.empty:
             st.info("No shift logs recorded yet.")
         else:
-            last
+            last_log = local_logs.iloc[-1]
+            st.markdown(f"""
+                <div class='log-box'>
+                    <strong>{last_log['Shift']} Shift</strong> | Pulse: {last_log['Rating']} | By: {last_log['Submitted_By']}<br>
+                    <em>"{last_log['Notes']}"</em>
+                </div>
+            """, unsafe_allow_html=True)
+
+    if not local_ticker.empty:
+        ticker_string = ""
+        for _, row in local_ticker.iterrows():
+            if "Kudos" in row['Type']: ticker_string += f"<span class='kudos-text'>🌟 {row['Message']}</span> &nbsp;&nbsp;&nbsp;&nbsp; | &nbsp;&nbsp;&nbsp;&nbsp; "
+            else: ticker_string += f"<span class='alert-text'>📢 {row['Message']}</span> &nbsp;&nbsp;&nbsp;&nbsp; | &nbsp;&nbsp;&nbsp;&nbsp; "
+                
+        st.markdown(f"<div class='ticker-wrap'><marquee class='ticker-text' scrollamount='8'>{ticker_string}</marquee></div>", unsafe_allow_html=True)
+
+live_tv_board()
