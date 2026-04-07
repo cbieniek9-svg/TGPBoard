@@ -123,5 +123,34 @@ def live_tv_board():
     
     now = get_yeg_now()
     
-    st.markdown(f"<h1 style='text-align: center; color: #ffffff; margin-bottom: 0px;'>Center Store Communication Board</h1>", unsafe_allow_html=True)
-    st.markdown(f"<h3 style='text-align: center; color: #ff9800; margin-top:
+    st.markdown("<h1 style='text-align: center; color: #ffffff; margin-bottom: 0px;'>Center Store Communication Board</h1>", unsafe_allow_html=True)
+    st.markdown(f"<h3 style='text-align: center; color: #ff9800; margin-top: 0px;'>{now.strftime('%A, %B %d')} | {now.strftime('%I:%M %p')}</h3>", unsafe_allow_html=True)
+    st.markdown("---")
+
+    total = local_counts['Grocery'].iloc[0] + local_counts['Frozen'].iloc[0]
+    staff = local_counts['Staff'].iloc[0]
+    est_hours = round(total / (staff * 60), 1) if total > 0 else 0
+    
+    c1, c2 = st.columns(2)
+    c1.markdown(f"<div class='big-number' style='color: #4CAF50;'>Grocery: {local_counts['Grocery'].iloc[0]}</div>", unsafe_allow_html=True)
+    c2.markdown(f"<div class='big-number' style='color: #2196F3;'>Frozen: {local_counts['Frozen'].iloc[0]}</div>", unsafe_allow_html=True)
+    st.markdown(f"<div class='est-time'>Est. Completion: {est_hours} hrs ({staff} staff)</div>", unsafe_allow_html=True)
+    st.markdown("---")
+    
+    open_t = local_tasks[local_tasks["Status"] == "Open"].copy()
+    if open_t.empty:
+        st.success("Floor is clear.")
+    else:
+        p_map = {"Urgent": 1, "High": 2, "Routine": 3}
+        open_t["p_rank"] = open_t["Priority"].map(p_map)
+        open_t = open_t.sort_values(["p_rank", "Task_ID"])
+        
+        display_order = ["General", "Front End", "Aisles 1-5", "Aisles 6-10", "Cooler/Freezer", "Backroom"]
+        for z in [z for z in display_order if z in open_t["Zone"].unique()]:
+            st.markdown(f"<div class='zone-header'>📍 {z}</div>", unsafe_allow_html=True)
+            for _, row in open_t[open_t["Zone"] == z].iterrows():
+                cols = st.columns([0.9, 0.1])
+                cols[0].markdown(f"<div class='task-{row['Priority'].lower()}'>{row['Task_Detail']}</div>", unsafe_allow_html=True)
+                cols[1].button("❌", key=f"t_{row['Task_ID']}", on_click=delete_task, args=(row['Task_ID'], active_user))
+
+live_tv_board()
