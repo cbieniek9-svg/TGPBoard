@@ -105,7 +105,6 @@ def execute_action(file, id_col, item_id, user=None):
 
 def delete_ticker(msg_id):
     df = load_data("ticker.csv")
-    # HARDENED: Drops corrupted NaN IDs before filtering
     df = df.dropna(subset=["Msg_ID"])
     df = df[pd.to_numeric(df["Msg_ID"], errors='coerce') != float(msg_id)]
     save_data(df, "ticker.csv")
@@ -201,7 +200,6 @@ with st.sidebar:
     with st.form("ticker_add", clear_on_submit=True):
         new_msg = st.text_input("Add Ticker Message")
         if st.form_submit_button("Broadcast") and new_msg:
-            # HARDENED: Prevent generating new NaN IDs
             if tk_df.empty or pd.isna(tk_df["Msg_ID"].max()):
                 new_id = 1
             else:
@@ -236,7 +234,11 @@ with st.sidebar:
         f_pcs = st.number_input("Frozen Pcs", value=safe_int(c_df, 'Frozen'))
         staff_count = st.number_input("Active Staff", min_value=1, value=safe_int(c_df, 'Staff', 1))
         if st.form_submit_button("Calculate Labor"):
-            c_df.loc[0, ['Grocery', 'Frozen', 'Staff', 'Last_Update']] = [g_pcs, f_pcs, staff_count, f_time(now)]
+            # HARDENED: Individually assigned to bypass Pandas slice strictness
+            c_df.at[0, 'Grocery'] = int(g_pcs)
+            c_df.at[0, 'Frozen'] = int(f_pcs)
+            c_df.at[0, 'Staff'] = int(staff_count)
+            c_df.at[0, 'Last_Update'] = str(f_time(now))
             save_data(c_df, "counts.csv"); st.rerun()
 
     st.divider()
@@ -433,7 +435,6 @@ def live_tv_board():
             st.rerun()
 
     # --- LIVE MULTI-TICKER (BOTTOM) ---
-    # HARDENED: Dropnas here as well before displaying to keep UI clean
     f_tk_df = f_tk_df.dropna(subset=["Message"])
     if not f_tk_df.empty:
         msgs = " &nbsp;&nbsp;&nbsp;&nbsp; 🛑 &nbsp;&nbsp;&nbsp;&nbsp; ".join(f_tk_df["Message"].astype(str).tolist())
