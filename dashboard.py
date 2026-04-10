@@ -164,7 +164,7 @@ t_df, oos_df, c_df, a_df, s_df, e_df = load_data("tasks.csv"), load_data("oos.cs
 tk_df, staff_df, set_df = load_data("ticker.csv"), load_data("staff.csv"), load_data("settings.csv")
 
 aisles = ["Aisle 1", "Aisle 2", "Aisle 3", "Aisle 4", "Aisle 5", "Aisle 6", "Aisle 7", "Aisle 8", "Receiving", "Freezer", "Bakery", "Outside"]
-weather_active = c_df["Weather_Alert"].iloc[0]
+weather_active = c_df["Weather_Alert"].iloc[0] if not c_df.empty and "Weather_Alert" in c_df.columns else False
 
 master_staff = staff_df["Name"].tolist()
 active_staff = staff_df[staff_df["Active"] == True]["Name"].tolist()
@@ -234,12 +234,16 @@ with st.sidebar:
         f_pcs = st.number_input("Frozen Pcs", value=safe_int(c_df, 'Frozen'))
         staff_count = st.number_input("Active Staff", min_value=1, value=safe_int(c_df, 'Staff', 1))
         if st.form_submit_button("Calculate Labor"):
-            # HARDENED: Individually assigned to bypass Pandas slice strictness
-            c_df.at[0, 'Grocery'] = int(g_pcs)
-            c_df.at[0, 'Frozen'] = int(f_pcs)
-            c_df.at[0, 'Staff'] = int(staff_count)
-            c_df.at[0, 'Last_Update'] = str(f_time(now))
-            save_data(c_df, "counts.csv"); st.rerun()
+            # HARDENED: Reconstructs the 1-row database completely to bypass strict type rules
+            new_counts = pd.DataFrame([{
+                "Grocery": int(g_pcs), 
+                "Frozen": int(f_pcs), 
+                "Staff": int(staff_count), 
+                "Last_Update": str(f_time(now)), 
+                "Weather_Alert": weather_active, 
+                "Ticker_Msg": c_df["Ticker_Msg"].iloc[0] if "Ticker_Msg" in c_df.columns and not c_df.empty else ""
+            }])
+            save_data(new_counts, "counts.csv"); st.rerun()
 
     st.divider()
     st.markdown("**4. Log OOS Holes**")
@@ -274,7 +278,8 @@ with st.sidebar:
 
     st.divider()
     if st.button("🌦️ Toggle Weather Alert"):
-        c_df.at[0, "Weather_Alert"] = not weather_active
+        # HARDENED: Overwrite the whole column to avoid strict .loc errors
+        c_df["Weather_Alert"] = not weather_active
         save_data(c_df, "counts.csv"); st.rerun()
 
     # --- ADMIN CONSOLE ---
@@ -325,7 +330,7 @@ def live_tv_board():
     f_set_df = load_data("settings.csv")
     f_staff_df = load_data("staff.csv")
 
-    f_weather_active = f_c_df["Weather_Alert"].iloc[0]
+    f_weather_active = f_c_df["Weather_Alert"].iloc[0] if not f_c_df.empty and "Weather_Alert" in f_c_df.columns else False
     f_active_staff = f_staff_df[f_staff_df["Active"] == True]["Name"].tolist()
     
     f_cases_per_hour = 55.0
