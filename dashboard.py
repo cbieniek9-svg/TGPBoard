@@ -199,40 +199,30 @@ def execute_eod_reset():
         cur.execute("DELETE FROM ticker")
         _internal_audit(cur, "EOD RESET COMPLETED by Admin")
 
-# --- UI STYLING (MOBILE-FIRST NAVIGATION FIX) ---
+# --- UI STYLING ---
 st.markdown(f"""
 <style>
 footer {{ visibility: hidden; }}
 #MainMenu {{ visibility: hidden; }}
 .stApp {{ background-color: #0b0f14; color: #d1d5db; }}
 
-/* MOBILE FIX: 
-   On Desktop/TV (screens larger than 1024px), hide the header completely for a clean look.
-   On Mobile (screens smaller than 1024px), keep the header visible so the hamburger menu works.
-*/
-@media screen and (min-width: 1025px) {{
-    header[data-testid="stHeader"] {{ visibility: hidden; }}
-    .block-container {{ padding-top: 2rem; padding-bottom: 5rem; padding-left: 2rem; padding-right: 2rem; max-width: 100%; }}
-}}
+/* HEADER TOGGLE FIX */
+header[data-testid="stHeader"] {{ background: rgba(0,0,0,0); visibility: visible; }}
+header[data-testid="stHeader"] > div:first-child {{ visibility: hidden; }}
 
-@media screen and (max-width: 1024px) {{
-    header[data-testid="stHeader"] {{ visibility: visible !important; background-color: #0b0f14; }}
-    .block-container {{ padding-top: 4rem; padding-bottom: 5rem; padding-left: 1rem; padding-right: 1rem; max-width: 100%; }}
-}}
+.block-container {{ padding-top: 2rem; padding-bottom: 5rem; padding-left: 2rem; padding-right: 2rem; max-width: 100%; }}
 
 .header-bar {{ display: flex; align-items: center; border-bottom: 3px solid #38bdf8; margin-bottom: 15px; padding-bottom: 10px; }}
 .header-title {{ font-size: 28px; font-weight: 800; color: #f9fafb; flex-grow: 1; text-transform: uppercase; letter-spacing: 1px;}}
-.kpi-container {{ display: grid; grid-template-columns: repeat(6, 1fr); gap: 10px; margin-bottom: 20px; }}
-.kpi-box {{ background: #161b22; border-top: 4px solid #38bdf8; padding: 12px; border-radius: 4px; text-align:center; box-shadow: 0 4px 6px rgba(0,0,0,0.3); }}
-.kpi-box.urgent {{ border-top-color: #ef4444; }}
-.kpi-label {{ font-size: 11px; font-weight: 700; color: #8b949e; text-transform: uppercase; }}
-.kpi-value {{ font-size: 22px; font-weight: 800; color: #f9fafb; }}
+
 .data-card {{ background: #161b22; border-left: 5px solid #38bdf8; padding: 10px 15px; margin-bottom: 8px; border-radius: 4px; }}
 .data-urgent {{ border-left-color: #ef4444; background: rgba(239, 68, 68, 0.05); }}
 .sect-header {{ font-size: 16px; font-weight: 700; color: #38bdf8; border-bottom: 1px solid #30363d; padding-bottom: 5px; margin: 15px 0 10px 0; text-transform: uppercase; }}
+
 .ticker-wrap {{ width: 100%; overflow: hidden; background-color: #facc15; border-top: 2px solid #ca8a04; border-bottom: 2px solid #ca8a04; padding: 12px 0; position: fixed; bottom: 0; left: 0; z-index: 999; }}
 .ticker {{ display: inline-block; white-space: nowrap; padding-left: 100%; animation: ticker 30s linear infinite; color: #000; font-family: 'Arial Black', sans-serif; font-size: 18px; text-transform: uppercase; }}
 @keyframes ticker {{ 0% {{ transform: translate3d(0, 0, 0); }} 100% {{ transform: translate3d(-100%, 0, 0); }} }}
+
 div[data-testid="stButton"] > button {{ border-radius: 4px; border: 1px solid #30363d; background: #21262d; color: #c9d1d9; font-weight: 700; width: 100%; }}
 div[data-testid="stButton"] > button:hover {{ border-color: #38bdf8; color: #38bdf8; }}
 </style>
@@ -271,17 +261,14 @@ if not set_df.empty:
     if not cph_val.empty:
         cases_per_hour = float(cph_val.iloc[0])
 
-# Determine if the 2-second refresh loop should run
 should_auto_refresh = is_tv_url_mode or global_tv_active or st.session_state.get("tv_toggle", False)
 
 # --- FULL SIDEBAR OPERATIONAL CONTROLS ---
 with st.sidebar:
     st.markdown("### 🔧 COMM CENTER")
     
-    # Local Screen Toggle
     st.toggle("📺 Local TV Display Mode", key="tv_toggle")
     
-    # Global Master Switch (Controls the floor TV from your phone)
     if global_tv_active:
         if st.button("🔴 STOP ALL AUTO-REFRESH", type="primary"):
             with get_db() as conn:
@@ -438,7 +425,7 @@ with st.sidebar:
                                 _strict_update(cur, "DELETE FROM staff WHERE Name = ?", (del_staff,))
                             st.rerun()
                         except sqlite3.IntegrityError:
-                            st.error(f"Cannot delete {del_staff}. They have active tasks assigned. Reassign them first.")
+                            st.error(f"Cannot delete {del_staff}. They have active tasks assigned.")
                 else:
                     st.caption("No staff to delete.")
                     st.form_submit_button("Delete", disabled=True)
@@ -487,23 +474,31 @@ def render_main_board(current_active_op):
     w = bool(curr_c["Weather_Alert"].iloc[0])
     l_s = curr_s[(curr_s["Active"] == 1) & (curr_s["Name"] != "Unassigned")]["Name"].tolist()
 
-    f_hrs = (g + f) / cph
+    total_pcs = g + f
+    f_hrs = (total_pcs / cph)
     open_tasks = t_df[t_df["Status"] == "Open"].copy()
     t_mins = pd.to_numeric(open_tasks["Est_Mins"], errors='coerce').fillna(15).sum()
     total_hrs = (f_hrs + (t_mins / 60.0)) / s
-    eta = (curr_now + timedelta(hours=total_hrs)).strftime('%I:%M %p') if (g+f > 0 or t_mins > 0) else "N/A"
+    eta = (curr_now + timedelta(hours=total_hrs)).strftime('%I:%M %p') if (total_pcs > 0 or t_mins > 0) else "N/A"
 
-    k1, k2, k3, k4, k5, k6 = st.columns(6)
-    k1.metric("Load", f"{g+f} Pcs")
-    k2.metric("Staff", s)
-    k3.metric("Tasks", f"{int(t_mins)}m")
-    k4.metric("Needed", f"{round(total_hrs,1)}h")
-    k5.metric("True ETA", eta)
+    # --- 7-COLUMN METRIC BAR (Grocery and Frozen separated) ---
+    k1, k2, k3, k4, k5, k6, k7 = st.columns(7)
+    k1.metric("Grocery", f"{g} Pcs")
+    k2.metric("Frozen", f"{f} Pcs")
+    k3.metric("Staff", s)
+    k4.metric("Tasks", f"{int(t_mins)}m")
+    k5.metric("Needed", f"{round(total_hrs,1)}h")
+    k6.metric("True ETA", eta)
     
     if st.session_state.get("tv_toggle", False) and not is_tv_url_mode:
-        if k6.button("🛑 EXIT TV MODE", type="primary"): 
+        if k7.button("🛑 EXIT TV MODE", type="primary"): 
             st.session_state["tv_toggle"] = False
             st.rerun()
+    else:
+        if w:
+            k7.error("❄️ SNOW")
+        else:
+            k7.metric("Weather", "CLEAR")
 
     L, R = st.columns([0.65, 0.35])
     with L:
