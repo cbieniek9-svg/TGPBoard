@@ -406,4 +406,187 @@ with st.sidebar:
     with st.expander("🛡️ Admin Console"):
         pin = st.text_input("Admin PIN", type="password")
         if pin and admin_pin_hash and get_pin_hash(pin) == admin_pin_hash:
-           
+            st.success("Admin Unlocked")
+            
+            st.markdown("**System Settings**")
+            with st.form("metric_form"):
+                new_cph = st.number_input("Target Cases Per Hour", value=cases_per_hour)
+                new_pin = st.text_input("Change Admin PIN (Leave blank to keep current)", type="password")
+                if st.form_submit_button("Update Settings"):
+                    with get_db() as conn:
+                        conn.execute("UPDATE settings SET Setting_Value = ? WHERE Setting_Name = 'Cases_Per_Hour'", (str(new_cph),))
+                        if new_pin.strip():
+                            conn.execute("UPDATE settings SET Setting_Value = ? WHERE Setting_Name = 'Admin_PIN'", (get_pin_hash(new_pin.strip()),))
+                    st.rerun()
+            
+            st.markdown("**Roster Management**")
+            with st.form("del_staff_form"):
+                if master_staff:
+                    del_staff = st.selectbox("Permanently Delete Floor Staff", master_staff)
+                    if st.form_submit_button("Delete"):
+                        try:
+                            with get_db() as conn:
+                                cur = conn.cursor()
+                                _strict_update(cur, "DELETE FROM staff WHERE Name = ?", (del_staff,))
+                            st.rerun()
+                        except sqlite3.IntegrityError:
+                            st.error(f"Cannot delete {del_staff}. They have active tasks assigned. Reassign them first.")
+                else:
+                    st.caption("No staff to delete.")
+                    st.form_submit_button("Delete", disabled=True)
+
+            st.markdown("**Database Reset**")
+            with st.form("eod_form"):
+                st.caption("⚠️ Purges closed tasks, holes, completed orders, and tickers.")
+                if st.form_submit_button("🌙 EXECUTE EOD RESET", type="primary"):
+                    execute_eod_reset()
+                    st.rerun()
+        elif pin:
+            st.error("Invalid PIN")
+
+# --- CORE RENDERING FUNCTION ---
+def render_main_board(current_active_op):
+    with get_db() as conn:
+        t_df = pd.read_sql("SELECT * FROM tasks", conn)
+        oos_df = pd.read_sql("SELECT * FROM oos", conn)
+        s_df = pd.read_sql("SELECT * FROM special_orders", conn)
+        e_df = pd.read_sql("SELECT * FROM expected_orders", conn)
+        curr_c = pd.read_sql("SELECT * FROM counts WHERE ID = 1", conn)
+        curr_s = pd.read_sql("SELECT * FROM staff", conn)
+        tk_df = pd.read_sql("SELECT * FROM ticker", conn)
+        st_df = pd.read_sql("SELECT * FROM settings", conn)
+
+    cph = 55.0
+    if not st_df.empty:
+        v = st_df.loc[st_df["Setting_Name"] == "Cases_Per_Hour", "Setting_Value"]
+        if not v.empty:
+            cph = max(1.0, float(v.iloc[0]))
+
+    curr_now = get_local_now()
+    st.markdown(f"""
+    <div class='header-bar'>
+        <div class='header-title'>TGP CENTRE STORE // {curr_now.strftime('%A')}</div>
+        <div style='color:#8b949e; font-size: 32px; font-weight: bold;'>{curr_now.strftime('%I:%M %p')}</div>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    if is_tv_url_mode:
+        st.caption("✅ TV URL Sync Active (2s Refresh)")
+    elif global_tv_active:
+        st.caption("📡 Global Remote TV Mode Active (2s Refresh)")
+
+    g, f, s = int(curr_c["Grocery"].iloc[0]), int(curr_c["Frozen"].iloc[0]), max(1, int(curr_c["Staff"].iloc[0]))
+    w = bool(curr_c["Weather_Alert"].iloc[0])
+    l_s = curr_s[(curr_s["Active"] == 1) & (curr_s["Name"] != "Unassigned")]["Name"].tolist()
+
+    f_hrs = (g + f) / cph
+    open_tasks = t_df[t_df["Status"] == "Open"].copy()
+    t_mins = pd.to_numeric(open_tasks["Est_Mins"], errors='coerce').fillna(15).sum()
+    total_hrs = (f_hrs + (t_mins / 60.0)) / s
+    eta = (curr_now + timedelta(hours=total_hrs)).strftime('%I:%M %p') if (g+f > 0 or t_mins > 0) else "N/A"
+
+    k1, k2, k3, k4, k5, k6 = st.columns(6)
+    k1.metric("Load", f"{g+f} Pcs")
+    k2.metric("Staff", s)
+    k3.metric("Tasks", f"{int(t_mins)}m")
+    k4.metric("Needed", f"{round(total_hrs,1)}h")
+    k5.metric("True ETA", eta)
+    
+    if st.session_state.get("tv_toggle", False) and not is_tv_url_mode:
+        if k6.button("🛑 EXIT TV MODE", type="primary"): 
+            st.session_state["tv_toggle"] = False
+            st.rerun()
+
+    L, R = st.columns([0.65, 0.35])
+    with L:
+        st.markdown("<div class='sect-header'>Tasks</div>", unsafe_allow_html=True)
+        if open_tasks.empty:
+            st.success("All tasks complete!")
+        for _, r in open_tasks.iterrows():
+            c1, c2, c3 = st.columns([0.6, 0.25, 0.15])
+            c1.markdown(f"<div class='data-card {'data-urgent' if r['Priority'] == 'Urgent' else ''}'><strong>[{r['Zone']}]</strong> {html.escape(r['Task_Detail'])} ({r['Est_Mins']}m)<br><small>OWNER: {r['Assigned_To']}</small></div>", unsafe_allow_html=True)
+            opts = ["Unassigned"] + l_s
+            if r['Assigned_To'] not in opts:
+                opts.append(r['Assigned_To'])
+            c2.selectbox("Ass", opts, index=opts.index(r['Assigned_To']), key=f"sel_{r['Task_ID']}", label_visibility="collapsed", on_change=handle_assign_callback, args=(r['Task_ID'], f"sel_{r['Task_ID']}"))
+            c3.button("DONE", key=f"dn_{r['Task_ID']}", on_click=complete_task, args=(r['Task_ID'], current_active_op))
+
+        st.markdown("<div class='sect-header'>Orders & Freight</div>", unsafe_allow_html=True)
+        c_ord, c_exp = st.columns(2)
+        with c_ord:
+            os_df = s_df[s_df["Status"] == "Open"]
+            if os_df.empty:
+                st.caption("No pending requests.")
+            for _, r in os_df.iterrows():
+                c_ord.markdown(f"<div class='data-card' style='border-left-color:#a855f7;'><strong>Loc {r['Location']}</strong>: {html.escape(r['Item'])}<br><small>{html.escape(r['Customer'])}</small></div>", unsafe_allow_html=True)
+                c_ord.button("PU", key=f"s_{r['Order_ID']}", on_click=complete_special_order, args=(r['Order_ID'], current_active_op))
+        with c_exp:
+            ex_df = e_df[e_df["Status"] == "Pending"]
+            if ex_df.empty:
+                st.caption("No expected freight.")
+            for _, r in ex_df.iterrows():
+                c_exp.markdown(f"<div class='data-card' style='border-left-color:#f59e0b;'>🚚 <strong>{html.escape(r['Vendor'])}</strong></div>", unsafe_allow_html=True)
+                c_exp.button("RCV", key=f"e_{r['Exp_ID']}", on_click=complete_expected_order, args=(r['Exp_ID'], current_active_op))
+
+    with R:
+        st.markdown("<div class='sect-header'>Shelf Holes (OOS)</div>", unsafe_allow_html=True)
+        open_oos = oos_df[oos_df["Status"] == "Open"]
+        if open_oos.empty:
+            st.caption("No holes reported.")
+        for _, r in open_oos.iterrows():
+            c1, c2 = st.columns([0.8, 0.2])
+            c1.markdown(f"<div class='data-card data-urgent'><strong>{r['Zone']}</strong>: {r['Hole_Count']} Holes<br><small>{html.escape(r['Notes'])}</small></div>", unsafe_allow_html=True)
+            c2.button("CLR", key=f"o_{r['OOS_ID']}", on_click=complete_oos, args=(r['OOS_ID'], current_active_op))
+
+        st.divider()
+        if st.button("🚀 Load Daily Rhythm"):
+            with get_db() as conn:
+                cur = conn.cursor()
+                hrs_math = (((g + f) / cph) / s) * 60 if (g + f) > 0 else 120
+                ds = [{"Task": "Direction Huddle", "Priority": "Urgent", "Zone": "General", "Time": 5}, {"Task": "Store Walk", "Priority": "High", "Zone": "General", "Time": 30}]
+                if w:
+                    ds.append({"Task": "Snow/Salt", "Priority": "Urgent", "Zone": "Outside", "Time": 20})
+                if curr_now.strftime('%A') in ["Sunday", "Tuesday", "Thursday"]:
+                    ds.append({"Task": "TGP Order", "Priority": "Urgent", "Zone": "Receiving", "Time": int(hrs_math)})
+                if curr_now.strftime('%A') == "Sunday":
+                    ds.append({"Task": "Build Displays (16hr budget)", "Priority": "High", "Zone": "General", "Time": 960})
+                if curr_now.strftime('%A') == "Wednesday":
+                    ds.append({"Task": "PRIMARY AD CHANGEOVER", "Priority": "Urgent", "Zone": "General", "Time": 240})
+                if curr_now.strftime('%A') == "Friday":
+                    ds.append({"Task": "Finalize Weekend Coverage", "Priority": "High", "Zone": "General", "Time": 60})
+                
+                i_t = 0
+                for d in ds:
+                    try:
+                        cur.execute("INSERT INTO tasks VALUES (?, ?, 'Open', ?, ?, 'Unassigned', ?, ?, '', '')", 
+                                     (gen_id(), d["Task"], d["Priority"], d["Zone"], d["Time"], get_utc_now()))
+                        i_t += 1
+                    except sqlite3.IntegrityError:
+                        pass
+                
+                i_v = 0
+                for v in VENDOR_SCHEDULE.get(curr_now.strftime('%A'), []):
+                    try:
+                        cur.execute("INSERT INTO expected_orders VALUES (?, ?, ?, 'Pending', 'AUTO', '', '')", 
+                                     (gen_id(), v, curr_now.strftime('%A')))
+                        i_v += 1
+                    except sqlite3.IntegrityError:
+                        pass
+                _internal_audit(cur, f"Auto-Load Complete: {i_t} tasks, {i_v} vendors")
+            st.rerun()
+
+    if not tk_df.empty:
+        live_tk = tk_df.dropna(subset=["Message"])
+        if not live_tk.empty:
+            m_str = " &nbsp;&nbsp;&nbsp;&nbsp; 🛑 &nbsp;&nbsp;&nbsp;&nbsp; ".join(live_tk["Message"].tolist())
+            st.markdown(f"<div class='ticker-wrap'><div class='ticker'>📢 {m_str} &nbsp;&nbsp;&nbsp;&nbsp; 🛑 &nbsp;&nbsp;&nbsp;&nbsp; </div></div>", unsafe_allow_html=True)
+
+# --- THE 2-SECOND ENGINE ---
+if should_auto_refresh:
+    @st.fragment(run_every=2)
+    def auto_refresh_loop(current_active_op):
+        render_main_board(current_active_op)
+        
+    auto_refresh_loop(active_op)
+else:
+    render_main_board(active_op)
