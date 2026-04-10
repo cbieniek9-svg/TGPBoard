@@ -336,7 +336,6 @@ def live_tv_board():
         try: f_cases_per_hour = float(f_set_df[f_set_df["Setting_Name"] == "Cases_Per_Hour"]["Setting_Value"].iloc[0])
         except: pass
 
-    # Time format changed to 12-hour AM/PM and made significantly larger
     st.markdown(f"<div class='header-bar'><div class='header-title'>TGP CENTRE STORE // {curr_day}</div><div style='color:#8b949e; font-size: 32px; font-weight: bold;'>{curr_now.strftime('%I:%M %p')}</div></div>", unsafe_allow_html=True)
 
     g_pcs, f_pcs, staff_count = safe_int(f_c_df, 'Grocery'), safe_int(f_c_df, 'Frozen'), safe_int(f_c_df, 'Staff', 1)
@@ -348,7 +347,6 @@ def live_tv_board():
     task_hours = task_mins / 60.0
 
     total_hours_needed = (freight_hours + task_hours) / staff_count if staff_count > 0 else 0
-    # ETA format changed to 12-hour AM/PM to match the header clock
     completion_time = (curr_now + timedelta(hours=total_hours_needed)).strftime('%I:%M %p') if (total_pcs > 0 or task_mins > 0) else "N/A"
 
     st.markdown(f"""
@@ -410,12 +408,25 @@ def live_tv_board():
 
         st.divider()
         if st.button("🚀 Auto-Load Daily Rhythm"):
+            # Calculate dynamic time for the TGP Order based on live metrics
+            dyn_g = safe_int(f_c_df, 'Grocery')
+            dyn_f = safe_int(f_c_df, 'Frozen')
+            dyn_s = max(1, safe_int(f_c_df, 'Staff', 1)) # Safely avoid dividing by zero
+            dyn_total = dyn_g + dyn_f
+            
+            dynamic_tgp_time = 120 # Fallback time
+            if dyn_total > 0 and f_cases_per_hour > 0:
+                dynamic_tgp_time = int(((dyn_total / f_cases_per_hour) / dyn_s) * 60)
+
             directives = [
                 {"Task": "5-Minute Direction Huddle", "Priority": "Urgent", "Zone": "General", "Time": 5},
                 {"Task": "Store Walk & Documentation", "Priority": "High", "Zone": "General", "Time": 30}
             ]
             if f_weather_active: directives.append({"Task": "URGENT: Snow Removal/Salt", "Priority": "Urgent", "Zone": "Outside", "Time": 20})
-            if curr_day in ["Sunday", "Tuesday", "Thursday"]: directives.append({"Task": "TGP DELIVERY SURGE", "Priority": "Urgent", "Zone": "Receiving", "Time": 120})
+            
+            # Replaced "TGP DELIVERY SURGE" with dynamic "TGP Order"
+            if curr_day in ["Sunday", "Tuesday", "Thursday"]: directives.append({"Task": "TGP Order", "Priority": "Urgent", "Zone": "Receiving", "Time": dynamic_tgp_time})
+            
             if curr_day == "Sunday": directives.append({"Task": "Build Displays (16hr budget)", "Priority": "High", "Zone": "General", "Time": 960})
             if curr_day == "Wednesday": directives.append({"Task": "PRIMARY AD CHANGEOVER", "Priority": "Urgent", "Zone": "General", "Time": 240})
             if curr_day == "Friday": directives.append({"Task": "Finalize Weekend Coverage", "Priority": "High", "Zone": "General", "Time": 60})
