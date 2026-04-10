@@ -199,7 +199,7 @@ def execute_eod_reset():
         cur.execute("DELETE FROM ticker")
         _internal_audit(cur, "EOD RESET COMPLETED by Admin")
 
-# --- UI STYLING ---
+# --- UI STYLING (ULTRA-DENSE FOR TV SCREEN) ---
 st.markdown(f"""
 <style>
 footer {{ visibility: hidden; }}
@@ -207,23 +207,37 @@ footer {{ visibility: hidden; }}
 .stApp {{ background-color: #0b0f14; color: #d1d5db; }}
 
 /* HEADER TOGGLE FIX */
-header[data-testid="stHeader"] {{ background: rgba(0,0,0,0); visibility: visible; }}
-header[data-testid="stHeader"] > div:first-child {{ visibility: hidden; }}
+@media screen and (min-width: 1025px) {{
+    header[data-testid="stHeader"] {{ visibility: hidden; }}
+    .block-container {{ padding-top: 0.5rem; padding-bottom: 3rem; padding-left: 1rem; padding-right: 1rem; max-width: 100%; }}
+}}
 
-.block-container {{ padding-top: 2rem; padding-bottom: 5rem; padding-left: 2rem; padding-right: 2rem; max-width: 100%; }}
+@media screen and (max-width: 1024px) {{
+    header[data-testid="stHeader"] {{ visibility: visible !important; background-color: #0b0f14; }}
+    .block-container {{ padding-top: 3rem; padding-bottom: 5rem; padding-left: 1rem; padding-right: 1rem; max-width: 100%; }}
+}}
 
-.header-bar {{ display: flex; align-items: center; border-bottom: 3px solid #38bdf8; margin-bottom: 15px; padding-bottom: 10px; }}
-.header-title {{ font-size: 28px; font-weight: 800; color: #f9fafb; flex-grow: 1; text-transform: uppercase; letter-spacing: 1px;}}
+/* Squeeze Streamlit vertical spacing */
+div[data-testid="stVerticalBlock"] {{ gap: 0.3rem !important; }}
 
-.data-card {{ background: #161b22; border-left: 5px solid #38bdf8; padding: 10px 15px; margin-bottom: 8px; border-radius: 4px; }}
+.header-bar {{ display: flex; align-items: center; border-bottom: 2px solid #38bdf8; margin-bottom: 5px; padding-bottom: 5px; padding-top: 5px; }}
+.header-title {{ font-size: 20px; font-weight: 800; color: #f9fafb; flex-grow: 1; text-transform: uppercase; margin: 0; }}
+
+.kpi-container {{ display: grid; grid-template-columns: repeat(7, 1fr); gap: 5px; margin-bottom: 10px; }}
+.kpi-box {{ background: #161b22; border-top: 3px solid #38bdf8; padding: 5px; border-radius: 4px; text-align:center; }}
+.kpi-box.urgent {{ border-top-color: #ef4444; }}
+.kpi-label {{ font-size: 10px; font-weight: 700; color: #8b949e; text-transform: uppercase; margin-bottom: 2px; }}
+.kpi-value {{ font-size: 16px; font-weight: 800; color: #f9fafb; }}
+
+.data-card {{ background: #161b22; border-left: 4px solid #38bdf8; padding: 4px 8px; margin-bottom: 4px; border-radius: 3px; font-size: 13px; line-height: 1.3; }}
 .data-urgent {{ border-left-color: #ef4444; background: rgba(239, 68, 68, 0.05); }}
-.sect-header {{ font-size: 16px; font-weight: 700; color: #38bdf8; border-bottom: 1px solid #30363d; padding-bottom: 5px; margin: 15px 0 10px 0; text-transform: uppercase; }}
+.sect-header {{ font-size: 14px; font-weight: 700; color: #38bdf8; border-bottom: 1px solid #30363d; padding-bottom: 2px; margin: 5px 0 5px 0; text-transform: uppercase; }}
 
-.ticker-wrap {{ width: 100%; overflow: hidden; background-color: #facc15; border-top: 2px solid #ca8a04; border-bottom: 2px solid #ca8a04; padding: 12px 0; position: fixed; bottom: 0; left: 0; z-index: 999; }}
-.ticker {{ display: inline-block; white-space: nowrap; padding-left: 100%; animation: ticker 30s linear infinite; color: #000; font-family: 'Arial Black', sans-serif; font-size: 18px; text-transform: uppercase; }}
+.ticker-wrap {{ width: 100%; overflow: hidden; background-color: #facc15; border-top: 2px solid #ca8a04; padding: 6px 0; position: fixed; bottom: 0; left: 0; z-index: 999; }}
+.ticker {{ display: inline-block; white-space: nowrap; padding-left: 100%; animation: ticker 30s linear infinite; color: #000; font-family: 'Arial Black', sans-serif; font-size: 16px; text-transform: uppercase; font-weight: bold; }}
 @keyframes ticker {{ 0% {{ transform: translate3d(0, 0, 0); }} 100% {{ transform: translate3d(-100%, 0, 0); }} }}
 
-div[data-testid="stButton"] > button {{ border-radius: 4px; border: 1px solid #30363d; background: #21262d; color: #c9d1d9; font-weight: 700; width: 100%; }}
+div[data-testid="stButton"] > button {{ border-radius: 3px; border: 1px solid #30363d; background: #21262d; color: #c9d1d9; font-weight: 700; width: 100%; padding: 2px 5px; min-height: 0; }}
 div[data-testid="stButton"] > button:hover {{ border-color: #38bdf8; color: #38bdf8; }}
 </style>
 """, unsafe_allow_html=True)
@@ -261,6 +275,7 @@ if not set_df.empty:
     if not cph_val.empty:
         cases_per_hour = float(cph_val.iloc[0])
 
+# Determine if the 2-second refresh loop should run
 should_auto_refresh = is_tv_url_mode or global_tv_active or st.session_state.get("tv_toggle", False)
 
 # --- FULL SIDEBAR OPERATIONAL CONTROLS ---
@@ -425,7 +440,7 @@ with st.sidebar:
                                 _strict_update(cur, "DELETE FROM staff WHERE Name = ?", (del_staff,))
                             st.rerun()
                         except sqlite3.IntegrityError:
-                            st.error(f"Cannot delete {del_staff}. They have active tasks assigned.")
+                            st.error(f"Cannot delete {del_staff}. They have active tasks assigned. Reassign them first.")
                 else:
                     st.caption("No staff to delete.")
                     st.form_submit_button("Delete", disabled=True)
@@ -458,10 +473,11 @@ def render_main_board(current_active_op):
             cph = max(1.0, float(v.iloc[0]))
 
     curr_now = get_local_now()
+    
     st.markdown(f"""
     <div class='header-bar'>
         <div class='header-title'>TGP CENTRE STORE // {curr_now.strftime('%A')}</div>
-        <div style='color:#8b949e; font-size: 32px; font-weight: bold;'>{curr_now.strftime('%I:%M %p')}</div>
+        <div style='color:#8b949e; font-size: 24px; font-weight: bold; margin: 0;'>{curr_now.strftime('%I:%M %p')}</div>
     </div>
     """, unsafe_allow_html=True)
     
@@ -481,24 +497,34 @@ def render_main_board(current_active_op):
     total_hrs = (f_hrs + (t_mins / 60.0)) / s
     eta = (curr_now + timedelta(hours=total_hrs)).strftime('%I:%M %p') if (total_pcs > 0 or t_mins > 0) else "N/A"
 
-    # --- 7-COLUMN METRIC BAR (Grocery and Frozen separated) ---
-    k1, k2, k3, k4, k5, k6, k7 = st.columns(7)
-    k1.metric("Grocery", f"{g} Pcs")
-    k2.metric("Frozen", f"{f} Pcs")
-    k3.metric("Staff", s)
-    k4.metric("Tasks", f"{int(t_mins)}m")
-    k5.metric("Needed", f"{round(total_hrs,1)}h")
-    k6.metric("True ETA", eta)
+    # --- 7-COLUMN METRIC BAR (ULTRA DENSE HTML) ---
+    weather_box = f"<div class='kpi-box urgent'><div class='kpi-label'>Weather</div><div class='kpi-value'>❄️ SNOW</div></div>" if w else f"<div class='kpi-box'><div class='kpi-label'>Weather</div><div class='kpi-value'>CLEAR</div></div>"
+    
+    # Check if we need to show the exit button instead of weather
+    exit_btn_html = ""
+    if st.session_state.get("tv_toggle", False) and not is_tv_url_mode:
+        exit_btn_html = """
+        <script>
+            // We use native Streamlit buttons below for this, but reserve the space here
+        </script>
+        """
+        
+    st.markdown(f"""
+    <div class='kpi-container'>
+        <div class='kpi-box'><div class='kpi-label'>Grocery</div><div class='kpi-value'>{g} Pcs</div></div>
+        <div class='kpi-box'><div class='kpi-label'>Frozen</div><div class='kpi-value'>{f} Pcs</div></div>
+        <div class='kpi-box'><div class='kpi-label'>Staff</div><div class='kpi-value'>{s}</div></div>
+        <div class='kpi-box'><div class='kpi-label'>Tasks</div><div class='kpi-value'>{int(t_mins)}m</div></div>
+        <div class='kpi-box {'urgent' if total_hrs > 7.5 else ''}'><div class='kpi-label'>Needed</div><div class='kpi-value'>{round(total_hrs,1)}h</div></div>
+        <div class='kpi-box'><div class='kpi-label'>True ETA</div><div class='kpi-value' style='color:#00e676;'>{eta}</div></div>
+        {weather_box if not (st.session_state.get("tv_toggle", False) and not is_tv_url_mode) else "<div class='kpi-box' style='padding:0;' id='exit-box'></div>"}
+    </div>
+    """, unsafe_allow_html=True)
     
     if st.session_state.get("tv_toggle", False) and not is_tv_url_mode:
-        if k7.button("🛑 EXIT TV MODE", type="primary"): 
+        if st.button("🛑 EXIT TV MODE", type="primary"): 
             st.session_state["tv_toggle"] = False
             st.rerun()
-    else:
-        if w:
-            k7.error("❄️ SNOW")
-        else:
-            k7.metric("Weather", "CLEAR")
 
     L, R = st.columns([0.65, 0.35])
     with L:
@@ -506,7 +532,7 @@ def render_main_board(current_active_op):
         if open_tasks.empty:
             st.success("All tasks complete!")
         for _, r in open_tasks.iterrows():
-            c1, c2, c3 = st.columns([0.6, 0.25, 0.15])
+            c1, c2, c3 = st.columns([0.65, 0.20, 0.15])
             c1.markdown(f"<div class='data-card {'data-urgent' if r['Priority'] == 'Urgent' else ''}'><strong>[{r['Zone']}]</strong> {html.escape(r['Task_Detail'])} ({r['Est_Mins']}m)<br><small>OWNER: {r['Assigned_To']}</small></div>", unsafe_allow_html=True)
             opts = ["Unassigned"] + l_s
             if r['Assigned_To'] not in opts:
@@ -541,7 +567,6 @@ def render_main_board(current_active_op):
             c1.markdown(f"<div class='data-card data-urgent'><strong>{r['Zone']}</strong>: {r['Hole_Count']} Holes<br><small>{html.escape(r['Notes'])}</small></div>", unsafe_allow_html=True)
             c2.button("CLR", key=f"o_{r['OOS_ID']}", on_click=complete_oos, args=(r['OOS_ID'], current_active_op))
 
-        st.divider()
         if st.button("🚀 Load Daily Rhythm"):
             with get_db() as conn:
                 cur = conn.cursor()
