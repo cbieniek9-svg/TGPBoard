@@ -4,26 +4,33 @@ import os
 from datetime import datetime, timedelta, timezone
 
 # --- PAGE CONFIGURATION ---
-st.set_page_config(page_title="Center Store Communication Board", layout="wide", initial_sidebar_state="expanded")
+# Set sidebar to collapsed by default so it stays out of the way on the TV
+st.set_page_config(page_title="Center Store Communication Board", layout="wide", initial_sidebar_state="collapsed")
 
-# --- CUSTOM TV STYLING & AUTO-REFRESH ---
-# The <meta> tag below handles the auto-refresh. "content=30" means 30 seconds.
+# --- CUSTOM TV STYLING & COMPACT LAYOUT ---
+# HTML auto-refresh removed. Margins crushed and fonts slightly reduced to fit 720p.
 st.markdown("""
-    <meta http-equiv="refresh" content="30">
     <style>
-    .task-routine { font-size: 28px; padding: 15px; background-color: #1e1e1e; border-left: 5px solid #ff9800; border-radius: 5px; margin-bottom: 5px; color: #ffffff; }
-    .task-high { font-size: 28px; padding: 15px; background-color: #1e1e1e; border-left: 5px solid #e91e63; border-radius: 5px; margin-bottom: 5px; color: #ffffff; }
-    .task-urgent { font-size: 32px; font-weight: bold; padding: 15px; background-color: #3b0000; border-left: 8px solid #ff0000; border-right: 8px solid #ff0000; border-radius: 5px; margin-bottom: 5px; color: #ffffff; }
-    .order-box { font-size: 28px; padding: 15px; background-color: #1e1e1e; border-left: 5px solid #9c27b0; border-radius: 5px; margin-bottom: 5px; color: #ffffff; }
-    .log-box { font-size: 24px; padding: 20px; background-color: #1a237e; border-left: 5px solid #5c6bc0; border-radius: 5px; margin-bottom: 20px; color: #ffffff; }
-    .big-number { font-size: 64px; font-weight: bold; text-align: center; margin-bottom: 0px; }
-    .est-time { font-size: 24px; text-align: center; color: #aaaaaa; margin-top: -10px; margin-bottom: 20px; }
-    .zone-header { color: #4CAF50; font-size: 32px; margin-top: 20px; margin-bottom: 10px; border-bottom: 2px solid #333; padding-bottom: 5px; }
-    .ticker-wrap { width: 100%; background-color: #111111; padding: 15px 0; border-top: 4px solid #ff9800; border-bottom: 4px solid #ff9800; margin-top: 40px; margin-bottom: 40px;}
-    .ticker-text { font-size: 36px; font-weight: bold; color: #ffffff; }
+    /* HIDE STREAMLIT UI & CRUSH MARGINS TO PREVENT SCROLLING */
+    header { visibility: hidden; }
+    footer { visibility: hidden; }
+    #MainMenu { visibility: hidden; }
+    .block-container { padding-top: 1rem; padding-bottom: 1rem; padding-left: 2rem; padding-right: 2rem; max-width: 100%; }
+    
+    /* CUSTOM CSS FOR DASHBOARD ELEMENTS */
+    .task-routine { font-size: 22px; padding: 10px; background-color: #1e1e1e; border-left: 5px solid #ff9800; border-radius: 5px; margin-bottom: 5px; color: #ffffff; }
+    .task-high { font-size: 22px; padding: 10px; background-color: #1e1e1e; border-left: 5px solid #e91e63; border-radius: 5px; margin-bottom: 5px; color: #ffffff; }
+    .task-urgent { font-size: 24px; font-weight: bold; padding: 10px; background-color: #3b0000; border-left: 8px solid #ff0000; border-right: 8px solid #ff0000; border-radius: 5px; margin-bottom: 5px; color: #ffffff; }
+    .order-box { font-size: 22px; padding: 10px; background-color: #1e1e1e; border-left: 5px solid #9c27b0; border-radius: 5px; margin-bottom: 5px; color: #ffffff; }
+    .log-box { font-size: 20px; padding: 15px; background-color: #1a237e; border-left: 5px solid #5c6bc0; border-radius: 5px; margin-bottom: 10px; color: #ffffff; }
+    .big-number { font-size: 52px; font-weight: bold; text-align: center; margin-bottom: 0px; }
+    .est-time { font-size: 20px; text-align: center; color: #aaaaaa; margin-top: -5px; margin-bottom: 10px; }
+    .zone-header { color: #4CAF50; font-size: 26px; margin-top: 10px; margin-bottom: 5px; border-bottom: 2px solid #333; padding-bottom: 3px; }
+    .ticker-wrap { width: 100%; background-color: #111111; padding: 10px 0; border-top: 4px solid #ff9800; border-bottom: 4px solid #ff9800; margin-top: 20px; margin-bottom: 20px;}
+    .ticker-text { font-size: 32px; font-weight: bold; color: #ffffff; }
     .kudos-text { color: #FFD700; } 
     .alert-text { color: #FF5252; } 
-    div[data-testid="stButton"] > button { height: 60px; width: 100%; font-size: 24px; }
+    div[data-testid="stButton"] > button { height: 50px; width: 100%; font-size: 20px; }
     </style>
 """, unsafe_allow_html=True)
 
@@ -73,14 +80,8 @@ def delete_order(order_id_to_close):
     df.loc[df["Order_ID"] == order_id_to_close, "Status"] = "Closed"
     save_orders(df)
 
-# --- SIDEBAR ---
-tasks = load_tasks()
-counts = load_counts()
-orders = load_orders()
-ticker_msgs = load_ticker()
-logs = load_logs()
-zones_list = ["General", "Aisle 1", "Aisle 2", "Aisle 3", "Aisle 4", "Aisle 5", "Aisle 6", "Aisle 7", "Aisle 8", "Receiving", "Freezer", "Click and Collect", "Bakery", "Outside"]
-
+# --- SIDEBAR CONTROL PANEL ---
+# Mobile users will pop this open, but it stays hidden on the TV
 with st.sidebar:
     st.header("📱 Control Panel")
     active_user = st.selectbox("👤 User:", ["Chris", "Ashley", "Luke", "Chandler"])
@@ -92,26 +93,22 @@ with st.sidebar:
     if is_admin:
         st.warning("ADMIN MODE ACTIVE")
         st.subheader("📊 Data Export")
-        st.download_button("⬇️ Export Tasks (CSV)", data=tasks.to_csv(index=False).encode('utf-8'), file_name=f"Tasks_{get_yeg_now().strftime('%Y%m%d')}.csv", mime='text/csv')
-        st.download_button("⬇️ Export Shift Logs (CSV)", data=logs.to_csv(index=False).encode('utf-8'), file_name=f"Logs_{get_yeg_now().strftime('%Y%m%d')}.csv", mime='text/csv')
+        st.download_button("⬇️ Export Tasks", data=load_tasks().to_csv(index=False).encode('utf-8'), file_name=f"Tasks_{get_yeg_now().strftime('%Y%m%d')}.csv", mime='text/csv')
+        st.download_button("⬇️ Export Shift Logs", data=load_logs().to_csv(index=False).encode('utf-8'), file_name=f"Logs_{get_yeg_now().strftime('%Y%m%d')}.csv", mime='text/csv')
         
         st.divider()
-        if st.button("🚨 CLEAR TICKER"): pd.DataFrame(columns=ticker_msgs.columns).to_csv(TICKER_FILE, index=False); st.rerun()
+        if st.button("🚨 CLEAR TICKER"): pd.DataFrame(columns=load_ticker().columns).to_csv(TICKER_FILE, index=False); st.rerun()
         if st.button("🚨 RESET ENTIRE BOARD"):
-            pd.DataFrame(columns=tasks.columns).to_csv(TASKS_FILE, index=False)
-            pd.DataFrame(columns=orders.columns).to_csv(ORDERS_FILE, index=False)
-            pd.DataFrame(columns=ticker_msgs.columns).to_csv(TICKER_FILE, index=False)
-            pd.DataFrame(columns=logs.columns).to_csv(LOGS_FILE, index=False)
+            pd.DataFrame(columns=load_tasks().columns).to_csv(TASKS_FILE, index=False)
+            pd.DataFrame(columns=load_orders().columns).to_csv(ORDERS_FILE, index=False)
+            pd.DataFrame(columns=load_ticker().columns).to_csv(TICKER_FILE, index=False)
+            pd.DataFrame(columns=load_logs().columns).to_csv(LOGS_FILE, index=False)
             st.rerun()
             
     st.divider()
 
     with st.expander("📚 SOP & Training Hub"):
-        st.markdown("**📦 Stocking Standards**\n1. Always face left-to-right.\n2. Minimum 2 units deep on all faces.\n3. Cardboard immediately into buggies, not on floor.")
-        st.markdown("**🛑 Safety Protocols**\n1. Never leave a glass spill unattended. Call for cleanup.\n2. Use 3 points of contact on ladders.\n3. Baler doors must remain locked when not in use.")
-        st.markdown("**💻 System Operations**\n1. Scan all out-of-stocks before 10 AM.\n2. Update special order status immediately upon receiving.")
-
-    st.divider()
+        st.markdown("**📦 Stocking Standards**\n1. Always face left-to-right.\n2. Minimum 2 units deep on all faces.\n3. Cardboard immediately into buggies.")
 
     if st.button("Push Daily Routine", type="primary"):
         routine_tasks = [
@@ -119,6 +116,7 @@ with st.sidebar:
             {"Detail": "Face Baking Aisle", "Zone": "Aisle 6", "Priority": "Routine"},
             {"Detail": "Bale / Cardboard", "Zone": "Receiving", "Priority": "Routine"}
         ]
+        tasks = load_tasks()
         now_str = get_yeg_now().strftime("%Y-%m-%d %H:%M:%S")
         curr_id = 0 if tasks.empty else tasks["Task_ID"].max()
         new_rows = [{"Task_ID": curr_id+i+1, "Task_Detail": t["Detail"], "Status": "Open", "Priority": t["Priority"], "Zone": t["Zone"], "Submitted_By": active_user, "Time_Submitted": now_str} for i, t in enumerate(routine_tasks)]
@@ -130,6 +128,7 @@ with st.sidebar:
         msg_type = st.selectbox("Type:", ["Kudos 🌟", "Alert 📢"])
         msg_text = st.text_input("Message:")
         if st.form_submit_button("Send to Ticker") and msg_text.strip():
+            ticker_msgs = load_ticker()
             new_m_id = 1 if ticker_msgs.empty else ticker_msgs["Message_ID"].max() + 1
             save_ticker(pd.concat([ticker_msgs, pd.DataFrame([{"Message_ID": new_m_id, "Message": msg_text.strip(), "Type": msg_type}])], ignore_index=True))
             st.rerun()
@@ -137,23 +136,26 @@ with st.sidebar:
     with st.form("add_task", clear_on_submit=True):
         st.subheader("Add Task")
         p = st.selectbox("Priority:", ["Routine", "High", "Urgent"])
-        z = st.selectbox("Zone:", zones_list)
+        z = st.selectbox("Zone:", ["General", "Aisle 1", "Aisle 2", "Aisle 3", "Aisle 4", "Aisle 5", "Aisle 6", "Aisle 7", "Aisle 8", "Receiving", "Freezer", "Click and Collect", "Bakery", "Outside"])
         d = st.text_area("Detail:")
         if st.form_submit_button("Push Task") and d.strip():
+            tasks = load_tasks()
             now_str = get_yeg_now().strftime("%Y-%m-%d %H:%M:%S")
             new_id = 1 if tasks.empty else tasks["Task_ID"].max() + 1
-            save_tasks(pd.concat([load_tasks(), pd.DataFrame([{"Task_ID": new_id, "Task_Detail": d, "Status": "Open", "Priority": p, "Zone": z, "Submitted_By": active_user, "Time_Submitted": now_str}])], ignore_index=True))
+            save_tasks(pd.concat([tasks, pd.DataFrame([{"Task_ID": new_id, "Task_Detail": d, "Status": "Open", "Priority": p, "Zone": z, "Submitted_By": active_user, "Time_Submitted": now_str}])], ignore_index=True))
             st.rerun()
 
     with st.form("add_order_form", clear_on_submit=True):
         st.subheader("Log Special Order")
         order_desc = st.text_area("Item/Customer/Date:")
         if st.form_submit_button("Push Order") and order_desc.strip():
+            orders = load_orders()
             new_o_id = 1 if orders.empty else orders["Order_ID"].max() + 1
             save_orders(pd.concat([orders, pd.DataFrame([{"Order_ID": new_o_id, "Order_Detail": order_desc.strip(), "Status": "Open"}])], ignore_index=True))
             st.rerun()
 
     with st.form("truck_info"):
+        counts = load_counts()
         st.subheader("Truck & Staff")
         g = st.number_input("Grocery:", value=int(counts["Grocery"].iloc[0]))
         f = st.number_input("Frozen:", value=int(counts["Frozen"].iloc[0]))
@@ -168,13 +170,18 @@ with st.sidebar:
         rating = st.select_slider("Shift Pulse:", options=["🔴 Brutal", "🟡 Grinding", "🟢 Smooth"])
         notes = st.text_area("Handoff Notes & Issues:")
         if st.form_submit_button("Submit Shift Log") and notes.strip():
+            logs = load_logs()
             now_str = get_yeg_now().strftime("%Y-%m-%d %H:%M:%S")
             new_l_id = 1 if logs.empty else logs["Log_ID"].max() + 1
             new_log = pd.DataFrame([{"Log_ID": new_l_id, "Shift": shift_type, "Rating": rating, "Notes": notes.strip(), "Submitted_By": active_user, "Time_Submitted": now_str}])
             save_logs(pd.concat([logs, new_log], ignore_index=True))
             st.rerun()
 
-# --- MAIN DASHBOARD ---
+
+# --- MAIN DASHBOARD (TV DISPLAY) ---
+# The @st.fragment decorator handles the smooth background refresh! 
+# "run_every=30" tells it to silently re-run this specific function every 30 seconds.
+@st.fragment(run_every=30)
 def live_tv_board():
     local_tasks = load_tasks()
     local_counts = load_counts()
@@ -250,4 +257,5 @@ def live_tv_board():
                 
         st.markdown(f"<div class='ticker-wrap'><marquee class='ticker-text' scrollamount='8'>{ticker_string}</marquee></div>", unsafe_allow_html=True)
 
+# Run the UI component
 live_tv_board()
