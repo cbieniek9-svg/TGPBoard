@@ -412,10 +412,10 @@ def render_main_board():
         if st.button("🚀 Load Rhythm"):
             with get_db() as conn:
                 cur = conn.cursor()
-                hrs = (((g + f) / cph) / s) * 60 if (g + f) > 0 else 120
+                hrs_math = (((g + f) / cph) / s) * 60 if (g + f) > 0 else 120
                 ds = [{"Task": "Direction Huddle", "P": "Urgent", "Z": "General", "T": 5}, {"Task": "Store Walk", "P": "High", "Z": "General", "T": 30}]
                 if w: ds.append({"Task": "Snow/Salt", "P": "Urgent", "Z": "Outside", "T": 20})
-                if curr_now.strftime('%A') in ["Sunday", "Tuesday", "Thursday"]: ds.append({"Task": "TGP Order", "P": "Urgent", "Z": "Receiving", "T": int(hrs)})
+                if curr_now.strftime('%A') in ["Sunday", "Tuesday", "Thursday"]: ds.append({"Task": "TGP Order", "P": "Urgent", "Z": "Receiving", "T": int(hrs_math)})
                 
                 i_t = 0
                 for d in ds:
@@ -425,7 +425,7 @@ def render_main_board():
                     except sqlite3.IntegrityError: pass
                 
                 i_v = 0
-                for v in V_S.get(curr_now.strftime('%A'), []):
+                for v in VENDOR_SCHEDULE.get(curr_now.strftime('%A'), []):
                     try:
                         cur.execute("INSERT INTO expected_orders VALUES (?, ?, ?, 'Pending', 'AUTO', '', '')", (gen_id(), v, curr_now.strftime('%A')))
                         i_v += 1
