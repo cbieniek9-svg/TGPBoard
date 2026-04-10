@@ -199,18 +199,26 @@ def execute_eod_reset():
         cur.execute("DELETE FROM ticker")
         _internal_audit(cur, "EOD RESET COMPLETED by Admin")
 
-# --- UI STYLING (HARDENED FOR TV MODE) ---
+# --- UI STYLING (MOBILE-FIRST NAVIGATION FIX) ---
 st.markdown(f"""
 <style>
 footer {{ visibility: hidden; }}
 #MainMenu {{ visibility: hidden; }}
 .stApp {{ background-color: #0b0f14; color: #d1d5db; }}
 
-/* HEADER TOGGLE FIX: Keep arrow visible but hide background */
-header[data-testid="stHeader"] {{ background: rgba(0,0,0,0); visibility: visible; }}
-header[data-testid="stHeader"] > div:first-child {{ visibility: hidden; }}
+/* MOBILE FIX: 
+   On Desktop/TV (screens larger than 1024px), hide the header completely for a clean look.
+   On Mobile (screens smaller than 1024px), keep the header visible so the hamburger menu works.
+*/
+@media screen and (min-width: 1025px) {{
+    header[data-testid="stHeader"] {{ visibility: hidden; }}
+    .block-container {{ padding-top: 2rem; padding-bottom: 5rem; padding-left: 2rem; padding-right: 2rem; max-width: 100%; }}
+}}
 
-.block-container {{ padding-top: 2rem; padding-bottom: 5rem; padding-left: 2rem; padding-right: 2rem; max-width: 100%; }}
+@media screen and (max-width: 1024px) {{
+    header[data-testid="stHeader"] {{ visibility: visible !important; background-color: #0b0f14; }}
+    .block-container {{ padding-top: 4rem; padding-bottom: 5rem; padding-left: 1rem; padding-right: 1rem; max-width: 100%; }}
+}}
 
 .header-bar {{ display: flex; align-items: center; border-bottom: 3px solid #38bdf8; margin-bottom: 15px; padding-bottom: 10px; }}
 .header-title {{ font-size: 28px; font-weight: 800; color: #f9fafb; flex-grow: 1; text-transform: uppercase; letter-spacing: 1px;}}
