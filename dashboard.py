@@ -70,7 +70,7 @@ for f, cols in DB_SCHEMA.items():
 def load_data(f): return pd.read_csv(f)
 def save_data(df, f): df.to_csv(f, index=False)
 
-# --- ACTIONS & CALLBACKS (Now mathematically bulletproof) ---
+# --- ACTIONS & CALLBACKS ---
 def log_audit(event):
     df = load_data("audit.csv")
     new_id = 1 if df.empty else df["Log_ID"].max() + 1
@@ -105,6 +105,8 @@ def execute_action(file, id_col, item_id, user=None):
 
 def delete_ticker(msg_id):
     df = load_data("ticker.csv")
+    # HARDENED: Drops corrupted NaN IDs before filtering
+    df = df.dropna(subset=["Msg_ID"])
     df = df[pd.to_numeric(df["Msg_ID"], errors='coerce') != float(msg_id)]
     save_data(df, "ticker.csv")
     log_audit("Broadcast message cleared")
@@ -199,7 +201,12 @@ with st.sidebar:
     with st.form("ticker_add", clear_on_submit=True):
         new_msg = st.text_input("Add Ticker Message")
         if st.form_submit_button("Broadcast") and new_msg:
-            new_id = 1 if tk_df.empty else tk_df["Msg_ID"].max() + 1
+            # HARDENED: Prevent generating new NaN IDs
+            if tk_df.empty or pd.isna(tk_df["Msg_ID"].max()):
+                new_id = 1
+            else:
+                new_id = int(tk_df["Msg_ID"].max()) + 1
+            
             save_data(pd.concat([tk_df, pd.DataFrame([{"Msg_ID": new_id, "Message": new_msg}])]), "ticker.csv")
             log_audit(f"Broadcast added: {new_msg}"); st.rerun()
             
@@ -207,7 +214,6 @@ with st.sidebar:
         for _, r in tk_df.iterrows():
             c1, c2 = st.columns([0.85, 0.15])
             c1.caption(f"📢 {r['Message']}")
-            # Use on_click callback instead of 'if button:'
             c2.button("X", key=f"tk_{r['Msg_ID']}", on_click=delete_ticker, args=(r['Msg_ID'],))
 
     st.divider()
@@ -306,7 +312,6 @@ with st.sidebar:
 # --- MAIN DASHBOARD (TV UI WITH AUTO-REFRESH) ---
 @st.fragment(run_every=10)
 def live_tv_board():
-    # Freshly load data to capture background changes from mobile users
     curr_now = get_now()
     curr_day = curr_now.strftime("%A")
     f_t_df = load_data("tasks.csv")
@@ -328,12 +333,10 @@ def live_tv_board():
 
     st.markdown(f"<div class='header-bar'><div class='header-title'>TGP CENTRE STORE // {curr_day}</div><div style='color:#8b949e;'>{curr_now.strftime('%H:%M')}</div></div>", unsafe_allow_html=True)
 
-    # TRUE KPI / Time to Complete Math
     g_pcs, f_pcs, staff_count = safe_int(f_c_df, 'Grocery'), safe_int(f_c_df, 'Frozen'), safe_int(f_c_df, 'Staff', 1)
     total_pcs = g_pcs + f_pcs
     freight_hours = (total_pcs / f_cases_per_hour) if f_cases_per_hour > 0 else 0
 
-    # Factor in Task Minutes
     open_t = f_t_df[f_t_df["Status"] == "Open"].copy()
     task_mins = pd.to_numeric(open_t["Est_Mins"], errors='coerce').fillna(15).sum() if not open_t.empty else 0
     task_hours = task_mins / 60.0
@@ -367,7 +370,6 @@ def live_tv_board():
                 if new_owner != "Assign...":
                     assign_task(r['Task_ID'], new_owner); st.rerun()
                 
-                # Use on_click callback
                 c3.button("DONE", key=f"dn_{r['Task_ID']}", on_click=complete_task, args=(r['Task_ID'], active_op, r['Assigned_To']))
 
         c1, c2 = st.columns(2)
@@ -378,7 +380,6 @@ def live_tv_board():
             for _, r in open_s.iterrows():
                 cx, cy = st.columns([0.75, 0.25])
                 cx.markdown(f"<div class='data-card' style='border-left-color:#a855f7; padding:8px;'><div><strong>📍 Location {r['Location']}</strong><br>{r['Item']}<br><span style='color:#a855f7; font-size:12px;'>👤 {r['Customer']}</span></div></div>", unsafe_allow_html=True)
-                # Use on_click callback
                 cy.button("P/U", key=f"s_{r['Order_ID']}", on_click=execute_action, args=("special_orders.csv", "Order_ID", r['Order_ID'], active_op))
 
         with c2:
@@ -388,7 +389,6 @@ def live_tv_board():
             for _, r in open_e.iterrows():
                 cx, cy = st.columns([0.75, 0.25])
                 cx.markdown(f"<div class='data-card' style='border-left-color:#f59e0b; padding:8px;'><div>🚚 <strong>{r['Vendor']}</strong></div></div>", unsafe_allow_html=True)
-                # Use on_click callback
                 cy.button("RCV", key=f"e_{r['Exp_ID']}", on_click=execute_action, args=("expected_orders.csv", "Exp_ID", r['Exp_ID'], active_op))
 
     with col_R:
@@ -399,7 +399,6 @@ def live_tv_board():
             c1, c2 = st.columns([0.8, 0.2])
             notes_html = f"<br><span style='color:#ef4444; font-size:12px;'>Notes: {r['Notes']}</span>" if r['Notes'] else ""
             c1.markdown(f"<div class='data-card data-urgent' style='padding:8px;'><div><strong>{r['Zone']}:</strong> {r['Hole_Count']} Holes {notes_html}</div></div>", unsafe_allow_html=True)
-            # Use on_click callback
             c2.button("CLR", key=f"o_{r['OOS_ID']}", on_click=execute_action, args=("oos.csv", "OOS_ID", r['OOS_ID'], active_op))
 
         st.divider()
@@ -434,10 +433,11 @@ def live_tv_board():
             st.rerun()
 
     # --- LIVE MULTI-TICKER (BOTTOM) ---
+    # HARDENED: Dropnas here as well before displaying to keep UI clean
+    f_tk_df = f_tk_df.dropna(subset=["Message"])
     if not f_tk_df.empty:
-        msgs = " &nbsp;&nbsp;&nbsp;&nbsp; 🛑 &nbsp;&nbsp;&nbsp;&nbsp; ".join(f_tk_df["Message"].tolist())
+        msgs = " &nbsp;&nbsp;&nbsp;&nbsp; 🛑 &nbsp;&nbsp;&nbsp;&nbsp; ".join(f_tk_df["Message"].astype(str).tolist())
         repeated_ticker = f"📢 {msgs} &nbsp;&nbsp;&nbsp;&nbsp; 🛑 &nbsp;&nbsp;&nbsp;&nbsp; " * 5
         st.markdown(f"<div class='ticker-wrap'><div class='ticker'>{repeated_ticker}</div></div>", unsafe_allow_html=True)
 
-# Call the function to render the UI
 live_tv_board()
