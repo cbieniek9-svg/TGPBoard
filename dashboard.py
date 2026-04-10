@@ -8,17 +8,29 @@ from datetime import datetime, timedelta, timezone
 # Set sidebar to collapsed by default so it stays out of the way on the TV
 st.set_page_config(page_title="TGP Operations OS", layout="wide", initial_sidebar_state="collapsed")
 
-# --- TV STYLING ---
+# --- RESPONSIVE TV & MOBILE STYLING ---
 st.markdown("""
     <style>
-    /* HIDE STREAMLIT UI & CRUSH MARGINS TO PREVENT SCROLLING */
-    header { visibility: hidden; }
+    /* HIDE FOOTER AND DEFAULT MENU GLOBALLY */
     footer { visibility: hidden; }
     #MainMenu { visibility: hidden; }
+
+    /* GLOBAL APP BACKGROUND */
+    .stApp { background-color: #0d1117; }
+
+    /* --- TV LAYOUT (DEFAULT - LARGE SCREENS) --- */
+    /* Hides the top bar entirely and crushes margins to fit 720p */
+    header { visibility: hidden; }
     .block-container { padding-top: 1rem; padding-bottom: 1rem; padding-left: 2rem; padding-right: 2rem; max-width: 100%; }
 
-    .stApp { background-color: #0d1117; }
+    /* --- MOBILE LAYOUT (SMALL SCREENS) --- */
+    /* If the screen is narrower than 1024px (phones/tablets), bring the top menu button back */
+    @media screen and (max-width: 1024px) {
+        header { visibility: visible; background-color: #0d1117; }
+        .block-container { padding-top: 4rem; padding-left: 1rem; padding-right: 1rem; }
+    }
     
+    /* CUSTOM CSS FOR DASHBOARD ELEMENTS */
     .task-card { font-size: 24px; padding: 15px; border-radius: 8px; margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center; color: #ffffff; background-color: #161b22; border: 1px solid #30363d;}
     .priority-routine { border-left: 6px solid #2ea043; }
     .priority-high { border-left: 6px solid #ff7b72; }
