@@ -6,8 +6,10 @@ from datetime import datetime, timedelta, timezone
 # --- PAGE CONFIGURATION ---
 st.set_page_config(page_title="Center Store Communication Board", layout="wide", initial_sidebar_state="expanded")
 
-# --- CUSTOM TV STYLING ---
+# --- CUSTOM TV STYLING & AUTO-REFRESH ---
+# The <meta> tag below handles the auto-refresh. "content=30" means 30 seconds.
 st.markdown("""
+    <meta http-equiv="refresh" content="30">
     <style>
     .task-routine { font-size: 28px; padding: 15px; background-color: #1e1e1e; border-left: 5px solid #ff9800; border-radius: 5px; margin-bottom: 5px; color: #ffffff; }
     .task-high { font-size: 28px; padding: 15px; background-color: #1e1e1e; border-left: 5px solid #e91e63; border-radius: 5px; margin-bottom: 5px; color: #ffffff; }
