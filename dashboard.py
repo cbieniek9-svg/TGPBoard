@@ -181,7 +181,7 @@ with st.sidebar:
 # --- MAIN DASHBOARD (TV DISPLAY) ---
 # The @st.fragment decorator handles the smooth background refresh! 
 # "run_every=30" tells it to silently re-run this specific function every 30 seconds.
-@st.fragment(run_every=30)
+@st.fragment(run_every=10)
 def live_tv_board():
     local_tasks = load_tasks()
     local_counts = load_counts()
