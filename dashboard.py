@@ -110,6 +110,23 @@ def delete_ticker(msg_id):
     save_data(df, "ticker.csv")
     log_audit("Broadcast message cleared")
 
+# HARDENED: Dedicated Callback for EOD Reset
+def execute_eod_reset():
+    # Force loads fresh data immediately before wiping
+    _t = load_data("tasks.csv")
+    _oos = load_data("oos.csv")
+    _s = load_data("special_orders.csv")
+    _e = load_data("expected_orders.csv")
+    _tk = load_data("ticker.csv")
+
+    save_data(_t[_t["Status"] == "Open"], "tasks.csv")
+    save_data(_oos.iloc[0:0], "oos.csv")  # Keeps headers, drops all rows
+    save_data(_s[_s["Status"] == "Open"], "special_orders.csv")
+    save_data(_e[_e["Status"] == "Pending"], "expected_orders.csv")
+    save_data(_tk.iloc[0:0], "ticker.csv")
+    
+    log_audit("EOD RESET COMPLETED by Admin")
+
 def safe_int(df, col, default=0):
     if df.empty or col not in df.columns: return default
     try: return int(float(df[col].iloc[0]))
@@ -302,14 +319,8 @@ with st.sidebar:
                     save_data(staff_df[staff_df["Name"] != del_staff], "staff.csv"); st.rerun()
 
             st.markdown("**Database Reset**")
-            if st.button("🌙 END OF DAY RESET", type="primary"):
-                save_data(t_df[t_df["Status"] == "Open"], "tasks.csv")
-                save_data(oos_df.iloc[0:0], "oos.csv")
-                save_data(s_df[s_df["Status"] == "Open"], "special_orders.csv")
-                save_data(e_df[e_df["Status"] == "Pending"], "expected_orders.csv")
-                save_data(tk_df.iloc[0:0], "ticker.csv")
-                log_audit("EOD RESET COMPLETED by Admin")
-                st.rerun()
+            # HARDENED: Switched to on_click callback so it forces a secure execution
+            st.button("🌙 END OF DAY RESET", type="primary", on_click=execute_eod_reset)
         elif pin:
             st.error("Invalid PIN")
 
@@ -408,13 +419,12 @@ def live_tv_board():
 
         st.divider()
         if st.button("🚀 Auto-Load Daily Rhythm"):
-            # Calculate dynamic time for the TGP Order based on live metrics
             dyn_g = safe_int(f_c_df, 'Grocery')
             dyn_f = safe_int(f_c_df, 'Frozen')
-            dyn_s = max(1, safe_int(f_c_df, 'Staff', 1)) # Safely avoid dividing by zero
+            dyn_s = max(1, safe_int(f_c_df, 'Staff', 1))
             dyn_total = dyn_g + dyn_f
             
-            dynamic_tgp_time = 120 # Fallback time
+            dynamic_tgp_time = 120
             if dyn_total > 0 and f_cases_per_hour > 0:
                 dynamic_tgp_time = int(((dyn_total / f_cases_per_hour) / dyn_s) * 60)
 
@@ -424,7 +434,6 @@ def live_tv_board():
             ]
             if f_weather_active: directives.append({"Task": "URGENT: Snow Removal/Salt", "Priority": "Urgent", "Zone": "Outside", "Time": 20})
             
-            # Replaced "TGP DELIVERY SURGE" with dynamic "TGP Order"
             if curr_day in ["Sunday", "Tuesday", "Thursday"]: directives.append({"Task": "TGP Order", "Priority": "Urgent", "Zone": "Receiving", "Time": dynamic_tgp_time})
             
             if curr_day == "Sunday": directives.append({"Task": "Build Displays (16hr budget)", "Priority": "High", "Zone": "General", "Time": 960})
