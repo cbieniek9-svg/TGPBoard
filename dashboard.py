@@ -110,20 +110,35 @@ def delete_ticker(msg_id):
     save_data(df, "ticker.csv")
     log_audit("Broadcast message cleared")
 
-# HARDENED: Dedicated Callback for EOD Reset
+# HARDENED: Bulletproof DB Reconstruction
 def execute_eod_reset():
-    # Force loads fresh data immediately before wiping
     _t = load_data("tasks.csv")
-    _oos = load_data("oos.csv")
     _s = load_data("special_orders.csv")
     _e = load_data("expected_orders.csv")
-    _tk = load_data("ticker.csv")
 
-    save_data(_t[_t["Status"] == "Open"], "tasks.csv")
-    save_data(_oos.iloc[0:0], "oos.csv")  # Keeps headers, drops all rows
-    save_data(_s[_s["Status"] == "Open"], "special_orders.csv")
-    save_data(_e[_e["Status"] == "Pending"], "expected_orders.csv")
-    save_data(_tk.iloc[0:0], "ticker.csv")
+    # Filter open tasks, or completely rebuild if corrupted
+    if not _t.empty and "Status" in _t.columns: 
+        save_data(_t[_t["Status"] == "Open"], "tasks.csv")
+    else: 
+        save_data(pd.DataFrame(columns=DB_SCHEMA["tasks.csv"]), "tasks.csv")
+
+    # Fully Nuke OOS Database
+    save_data(pd.DataFrame(columns=DB_SCHEMA["oos.csv"]), "oos.csv")
+
+    # Filter open orders, or completely rebuild if corrupted
+    if not _s.empty and "Status" in _s.columns: 
+        save_data(_s[_s["Status"] == "Open"], "special_orders.csv")
+    else: 
+        save_data(pd.DataFrame(columns=DB_SCHEMA["special_orders.csv"]), "special_orders.csv")
+
+    # Filter pending vendors, or completely rebuild if corrupted
+    if not _e.empty and "Status" in _e.columns: 
+        save_data(_e[_e["Status"] == "Pending"], "expected_orders.csv")
+    else: 
+        save_data(pd.DataFrame(columns=DB_SCHEMA["expected_orders.csv"]), "expected_orders.csv")
+
+    # Fully Nuke Tickers
+    save_data(pd.DataFrame(columns=DB_SCHEMA["ticker.csv"]), "ticker.csv")
     
     log_audit("EOD RESET COMPLETED by Admin")
 
@@ -318,9 +333,13 @@ with st.sidebar:
                 if st.form_submit_button("Delete"):
                     save_data(staff_df[staff_df["Name"] != del_staff], "staff.csv"); st.rerun()
 
+            # HARDENED: Locked inside a Streamlit Form to guarantee execution
             st.markdown("**Database Reset**")
-            # HARDENED: Switched to on_click callback so it forces a secure execution
-            st.button("🌙 END OF DAY RESET", type="primary", on_click=execute_eod_reset)
+            with st.form("eod_form"):
+                st.caption("⚠️ Purges closed tasks, holes, completed orders, and tickers.")
+                if st.form_submit_button("🌙 EXECUTE EOD RESET", type="primary"):
+                    execute_eod_reset()
+                    st.rerun()
         elif pin:
             st.error("Invalid PIN")
 
