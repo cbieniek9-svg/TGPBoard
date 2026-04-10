@@ -13,7 +13,7 @@ except ImportError:
     import pytz
     LOCAL_TZ = pytz.timezone("America/Edmonton")
 
-# --- STRICT ISO-8601 UTC TIMESTAMPS ---
+# --- HARDENED: STRICT ISO-8601 UTC TIMESTAMPS ---
 def get_utc_now(): return datetime.now(timezone.utc).isoformat()
 def get_local_now(): return datetime.now(LOCAL_TZ)
 def get_pin_hash(pin_str): return hashlib.sha256(str(pin_str).encode()).hexdigest()
@@ -46,13 +46,12 @@ def get_db():
     conn.execute("PRAGMA foreign_keys = ON;")
     return conn
 
-# --- DATABASE INITIALIZATION, INDEXING & FK CONSTRAINTS ---
+# --- DATABASE INITIALIZATION ---
 def init_db():
     with get_db() as conn:
         conn.execute('''CREATE TABLE IF NOT EXISTS staff
                         (Name TEXT PRIMARY KEY, Active INTEGER)''')
                         
-        # Changed to RESTRICT to align with UI expectations of blocking deletion
         conn.execute('''CREATE TABLE IF NOT EXISTS tasks
                         (Task_ID TEXT PRIMARY KEY, Task_Detail TEXT, Status TEXT, Priority TEXT, 
                          Zone TEXT, Assigned_To TEXT REFERENCES staff(Name) ON DELETE RESTRICT, 
@@ -65,7 +64,6 @@ def init_db():
         try: conn.execute("SELECT ID FROM counts")
         except sqlite3.OperationalError: conn.execute("DROP TABLE IF EXISTS counts")
             
-        # Added CHECK constraint to prevent absurd staff numbers causing UI math errors
         conn.execute('''CREATE TABLE IF NOT EXISTS counts
                         (ID INTEGER PRIMARY KEY CHECK (ID = 1), Grocery INTEGER, Frozen INTEGER, 
                          Staff INTEGER CHECK (Staff >= 1 AND Staff <= 100), Last_Update TEXT, 
@@ -94,7 +92,6 @@ def init_db():
         conn.execute("CREATE INDEX IF NOT EXISTS idx_oos_status ON oos(Status)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_orders_status ON special_orders(Status)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_expected_status ON expected_orders(Status)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_rowid ON audit(rowid)")
         
         try: conn.execute("CREATE UNIQUE INDEX idx_tasks_unique_open ON tasks(Task_Detail) WHERE Status = 'Open'")
         except sqlite3.OperationalError: pass
@@ -111,7 +108,7 @@ def init_db():
 
 init_db()
 
-# --- INTERNAL SERVICE LAYER (BUSINESS LOGIC & TRANSACTIONS) ---
+# --- INTERNAL SERVICE LAYER (BUSINESS LOGIC) ---
 def _internal_audit(cur, event):
     cur.execute("INSERT INTO audit VALUES (?, ?, ?)", (gen_id(), get_utc_now(), event))
     cur.execute("DELETE FROM audit WHERE rowid NOT IN (SELECT rowid FROM audit ORDER BY rowid DESC LIMIT 100)")
@@ -119,7 +116,7 @@ def _internal_audit(cur, event):
 def _strict_update(cur, query, params):
     cur.execute(query, params)
     if cur.rowcount != 1:
-        raise ValueError("Transaction failed: Target record not found or duplicate.")
+        raise ValueError("Transaction failed: Target record not found or already modified.")
 
 def assign_task(task_id, staff_name):
     with get_db() as conn:
@@ -138,7 +135,6 @@ def complete_task(task_id, premium_user):
         cur.execute("SELECT Assigned_To FROM tasks WHERE Task_ID = ?", (str(task_id),))
         row = cur.fetchone()
         if not row: raise ValueError(f"Task {task_id} not found.")
-        
         worker = row[0] if row[0] not in ["", "Unassigned", None] else "the Team"
         _strict_update(cur, "UPDATE tasks SET Status = 'Closed', Closed_By = ?, Time_Closed = ? WHERE Task_ID = ?", 
                      (premium_user, get_utc_now(), str(task_id)))
@@ -179,10 +175,9 @@ def execute_eod_reset():
         cur.execute("DELETE FROM expected_orders WHERE Status != 'Pending'")
         cur.execute("DELETE FROM oos")
         cur.execute("DELETE FROM ticker")
-        _internal_audit(cur, "EOD RESET COMPLETED by Admin")
+        _internal_audit(cur, "EOD RESET COMPLETED")
 
-
-# --- UI STYLING & RESPONSIVE DESIGN ---
+# --- UI STYLING ---
 st.markdown(f"""
 <style>
 footer {{ visibility: hidden; }}
@@ -213,8 +208,7 @@ div[data-testid="stButton"] > button:hover {{ border-color: #38bdf8; color: #38b
 </style>
 """, unsafe_allow_html=True)
 
-
-# --- DYNAMIC SIDEBAR LOAD ---
+# --- SIDEBAR LOAD ---
 with get_db() as conn:
     c_df = pd.read_sql("SELECT * FROM counts WHERE ID = 1", conn)
     staff_df = pd.read_sql("SELECT * FROM staff", conn)
@@ -236,19 +230,14 @@ if not set_df.empty:
     pin_val = set_df.loc[set_df["Setting_Name"] == "Admin_PIN", "Setting_Value"]
     if not pin_val.empty: admin_pin_hash = pin_val.iloc[0]
 
-
-# --- SIDEBAR: OPERATIONAL CONTROLS ---
 with st.sidebar:
     st.markdown("### 🔧 COMM CENTER")
-    
     is_tv_mode = st.toggle("📺 TV Display Mode (Auto-Refreshes)")
     active_op = st.selectbox("Premium Operator:", PREMIUM_STAFF)
-    
     if not is_tv_mode:
-        if st.button("🔄 Sync Board Now"): st.rerun()
+        if st.button("🔄 Sync Board"): st.rerun()
 
-    with st.expander("👥 Shift Roster Settings (Floor Staff)"):
-        st.caption("Select floor staff working today.")
+    with st.expander("👥 Shift Roster"):
         selected_active = st.multiselect("Active Today:", master_staff, default=active_staff)
         if selected_active != active_staff:
             with get_db() as conn:
@@ -257,304 +246,199 @@ with st.sidebar:
                     placeholders = ','.join(['?'] * len(selected_active))
                     conn.execute(f"UPDATE staff SET Active = 1 WHERE Name IN ({placeholders})", selected_active)
             st.rerun()
-            
-        st.divider()
-        new_staff = st.text_input("Add New Floor Staff")
-        if st.button("Add to Roster") and new_staff and new_staff.strip() not in master_staff:
+        new_staff = st.text_input("Add Staff")
+        if st.button("Add") and new_staff and new_staff.strip() not in master_staff:
             with get_db() as conn:
-                conn.execute("INSERT OR IGNORE INTO staff (Name, Active) VALUES (?, 1)", (new_staff.strip(),))
+                conn.execute("INSERT OR IGNORE INTO staff VALUES (?, 1)", (new_staff.strip(),))
             st.rerun()
 
-    st.divider()
-    st.markdown("**1. Broadcast Manager**")
-    with st.form("ticker_add", clear_on_submit=True):
-        new_msg = st.text_input("Add Ticker Message")
+    st.markdown("**1. Broadcast**")
+    with st.form("ticker_form", clear_on_submit=True):
+        new_msg = st.text_input("Message")
         if st.form_submit_button("Broadcast") and new_msg.strip():
             with get_db() as conn:
                 cur = conn.cursor()
                 cur.execute("INSERT INTO ticker VALUES (?, ?)", (gen_id(), new_msg.strip()))
-                _internal_audit(cur, f"Broadcast added: {new_msg.strip()}")
+                _internal_audit(cur, f"Broadcast: {new_msg.strip()}")
             st.rerun()
 
-    st.divider()
     st.markdown("**2. Deploy Task**")
-    with st.form("custom_task_form", clear_on_submit=True):
-        t_desc = st.text_input("Task Description")
+    with st.form("task_form", clear_on_submit=True):
+        t_desc = st.text_input("Description")
         t_zone = st.selectbox("Zone", aisles)
         t_pri = st.selectbox("Priority", ["Routine", "High", "Urgent"])
-        t_est = st.number_input("Est. Time (Mins)", min_value=1, value=15, step=5)
-        if st.form_submit_button("Deploy Task") and t_desc.strip():
+        t_est = st.number_input("Mins", min_value=1, value=15, step=5)
+        if st.form_submit_button("Deploy") and t_desc.strip():
             with get_db() as conn:
                 cur = conn.cursor()
                 try:
                     cur.execute("INSERT INTO tasks VALUES (?, ?, 'Open', ?, ?, 'Unassigned', ?, ?, '', '')", 
                                  (gen_id(), t_desc.strip().capitalize(), t_pri, t_zone, t_est, get_utc_now()))
                     _internal_audit(cur, f"Task Deployed: {t_desc.strip()}")
-                except sqlite3.IntegrityError:
-                    st.error("Task already exists and is Open.")
+                except sqlite3.IntegrityError: st.error("Task already open.")
             st.rerun()
 
-    st.divider()
-    st.markdown("**3. Load / Labor Engine**")
+    st.markdown("**3. Load Entry**")
     with st.form("load_form"):
-        in_g_pcs = st.number_input("Grocery Pcs", min_value=0, value=g_pcs)
-        in_f_pcs = st.number_input("Frozen Pcs", min_value=0, value=f_pcs)
-        in_staff = st.number_input("Active Staff", min_value=1, value=staff_count)
-        if st.form_submit_button("Calculate Labor"):
+        in_g = st.number_input("Grocery Pcs", min_value=0, value=g_pcs)
+        in_f = st.number_input("Frozen Pcs", min_value=0, value=f_pcs)
+        in_s = st.number_input("Staff", min_value=1, value=staff_count)
+        if st.form_submit_button("Update Load"):
             with get_db() as conn:
                 conn.execute("UPDATE counts SET Grocery=?, Frozen=?, Staff=?, Last_Update=? WHERE ID = 1", 
-                             (in_g_pcs, in_f_pcs, in_staff, get_utc_now()))
+                             (in_g, in_f, in_s, get_utc_now()))
             st.rerun()
 
-    st.divider()
-    st.markdown("**4. Log OOS Holes**")
+    st.markdown("**4. Log OOS**")
     with st.form("oos_form", clear_on_submit=True):
-        oos_zone = st.selectbox("Aisle", aisles[:8] + ["Freezer", "Bakery"])
-        oos_count = st.number_input("Number of Holes", min_value=1, value=1)
-        oos_notes = st.text_input("Notes (e.g., Deletes, Missing DSD)")
-        if st.form_submit_button("Log Holes"):
+        o_z = st.selectbox("Aisle", aisles[:10])
+        o_c = st.number_input("Holes", min_value=1, value=1)
+        o_n = st.text_input("Notes")
+        if st.form_submit_button("Log OOS"):
             with get_db() as conn:
                 cur = conn.cursor()
                 cur.execute("INSERT INTO oos VALUES (?, ?, ?, ?, 'Open', ?, ?, '', '')", 
-                             (gen_id(), oos_zone, oos_count, oos_notes.strip(), active_op, get_utc_now()))
-                _internal_audit(cur, f"Logged {oos_count} holes in {oos_zone}")
+                             (gen_id(), o_z, o_c, o_n.strip(), active_op, get_utc_now()))
+                _internal_audit(cur, f"Logged {o_c} holes in {o_z}")
             st.rerun()
 
-    st.divider()
-    st.markdown("**5. Log Customer Order**")
-    with st.form("cust_order_form", clear_on_submit=True):
-        c_loc = st.selectbox("Location Ordered Under", ORDER_LOCATIONS)
-        c_item = st.text_input("Item")
-        c_name = st.text_input("Customer Name")
-        if st.form_submit_button("Log Order") and c_item.strip() and c_name.strip():
+    st.markdown("**5. Customer Orders**")
+    with st.form("order_form", clear_on_submit=True):
+        l = st.selectbox("Loc", ORDER_LOCATIONS)
+        i = st.text_input("Item")
+        c = st.text_input("Cust")
+        if st.form_submit_button("Log Order") and i.strip() and c.strip():
             with get_db() as conn:
                 cur = conn.cursor()
                 cur.execute("INSERT INTO special_orders VALUES (?, ?, ?, '', ?, 'Open', ?, ?, '', '')", 
-                             (gen_id(), c_name.strip(), c_item.strip(), c_loc, active_op, get_utc_now()))
-                _internal_audit(cur, f"Customer Order Logged for Location {c_loc}")
+                             (gen_id(), c.strip(), i.strip(), l, active_op, get_utc_now()))
+                _internal_audit(cur, f"Order: {i} for {c}")
             st.rerun()
 
-    st.divider()
-    st.markdown("**6. Add Extra Inbound Vendor**")
-    with st.form("exp_order_form", clear_on_submit=True):
-        e_ven = st.text_input("Vendor (e.g. Direct Plus, Saputo)")
-        if st.form_submit_button("Log Extra Inbound") and e_ven.strip():
-            with get_db() as conn:
-                cur = conn.cursor()
-                try:
-                    cur.execute("INSERT INTO expected_orders VALUES (?, ?, ?, 'Pending', ?, '', '')", 
-                                 (gen_id(), e_ven.strip(), day_name, active_op))
-                    _internal_audit(cur, f"Extra Inbound Logged: {e_ven.strip()}")
-                except sqlite3.IntegrityError:
-                    st.error("Vendor already expected today.")
-            st.rerun()
-
-    st.divider()
-    if st.button("🌦️ Toggle Weather Alert"):
+    if st.button("🌦️ Toggle Weather"):
         with get_db() as conn:
             cur = conn.cursor()
             cur.execute("UPDATE counts SET Weather_Alert = CASE WHEN Weather_Alert = 1 THEN 0 ELSE 1 END WHERE ID = 1")
-            _internal_audit(cur, "Weather alert toggled")
+            _internal_audit(cur, "Weather toggled")
         st.rerun()
 
-    # --- ADMIN CONSOLE ---
-    st.divider()
-    with st.expander("🛡️ Admin Console"):
-        pin = st.text_input("Admin PIN", type="password")
+    with st.expander("🛡️ Admin"):
+        pin = st.text_input("PIN", type="password")
         if pin and admin_pin_hash and get_pin_hash(pin) == admin_pin_hash:
-            st.success("Admin Unlocked")
-            
-            st.markdown("**System Settings**")
-            with st.form("metric_form"):
-                current_cph = 55.0
-                if not set_df.empty:
-                    cph_val = set_df.loc[set_df["Setting_Name"] == "Cases_Per_Hour", "Setting_Value"]
-                    if not cph_val.empty: current_cph = float(cph_val.iloc[0])
-                
-                new_cph = st.number_input("Target Cases Per Hour", value=current_cph)
-                new_pin = st.text_input("Change Admin PIN (Leave blank to keep current)", type="password")
-                if st.form_submit_button("Update Settings"):
-                    with get_db() as conn:
-                        conn.execute("UPDATE settings SET Setting_Value = ? WHERE Setting_Name = 'Cases_Per_Hour'", (str(new_cph),))
-                        if new_pin.strip():
-                            conn.execute("UPDATE settings SET Setting_Value = ? WHERE Setting_Name = 'Admin_PIN'", (get_pin_hash(new_pin.strip()),))
-                    st.rerun()
-            
-            st.markdown("**Roster Management**")
-            with st.form("del_staff_form"):
-                if master_staff:
-                    del_staff = st.selectbox("Permanently Delete Floor Staff", master_staff)
-                    if st.form_submit_button("Delete"):
-                        try:
-                            with get_db() as conn:
-                                cur = conn.cursor()
-                                _strict_update(cur, "DELETE FROM staff WHERE Name = ?", (del_staff,))
-                            st.rerun()
-                        except sqlite3.IntegrityError:
-                            st.error(f"Cannot delete {del_staff}. They have active tasks assigned. Reassign them first.")
-                else:
-                    st.caption("No staff to delete.")
-                    st.form_submit_button("Delete", disabled=True)
+            st.success("Unlocked")
+            new_cph = st.number_input("Target CPH", value=55.0)
+            if st.button("Update Target"):
+                with get_db() as conn:
+                    conn.execute("UPDATE settings SET Setting_Value = ? WHERE Setting_Name = 'Cases_Per_Hour'", (str(new_cph),))
+                st.rerun()
+            if st.button("EOD RESET", type="primary"):
+                execute_eod_reset(); st.rerun()
 
-            st.markdown("**Database Reset**")
-            with st.form("eod_form"):
-                st.caption("⚠️ Purges closed tasks, holes, completed orders, and tickers.")
-                if st.form_submit_button("🌙 EXECUTE EOD RESET", type="primary"):
-                    execute_eod_reset()
-                    st.rerun()
-        elif pin:
-            st.error("Invalid PIN")
-
-
-# --- CORE RENDERING FUNCTION ---
+# --- RENDERING ---
 def render_main_board():
     with get_db() as conn:
         t_df = pd.read_sql("SELECT * FROM tasks", conn)
         oos_df = pd.read_sql("SELECT * FROM oos", conn)
         s_df = pd.read_sql("SELECT * FROM special_orders", conn)
         e_df = pd.read_sql("SELECT * FROM expected_orders", conn)
-        curr_c_df = pd.read_sql("SELECT * FROM counts WHERE ID = 1", conn)
-        curr_staff_df = pd.read_sql("SELECT * FROM staff", conn)
+        curr_c = pd.read_sql("SELECT * FROM counts WHERE ID = 1", conn)
+        curr_s = pd.read_sql("SELECT * FROM staff", conn)
         tk_df = pd.read_sql("SELECT * FROM ticker", conn)
-        live_set_df = pd.read_sql("SELECT * FROM settings", conn)
+        st_df = pd.read_sql("SELECT * FROM settings", conn)
+
+    cph = 55.0
+    if not st_df.empty:
+        v = st_df.loc[st_df["Setting_Name"] == "Cases_Per_Hour", "Setting_Value"]
+        if not v.empty: cph = max(1.0, float(v.iloc[0]))
 
     curr_now = get_local_now()
-    curr_day = curr_now.strftime("%A")
+    st.markdown(f"<div class='header-bar'><div class='header-title'>TGP CENTRE STORE // {curr_now.strftime('%A')}</div><div style='color:#8b949e; font-size: 32px; font-weight: bold;'>{curr_now.strftime('%I:%M %p')}</div></div>", unsafe_allow_html=True)
 
-    st.markdown(f"<div class='header-bar'><div class='header-title'>TGP CENTRE STORE // {curr_day}</div><div style='color:#8b949e; font-size: 32px; font-weight: bold;'>{curr_now.strftime('%I:%M %p')}</div></div>", unsafe_allow_html=True)
+    g, f, s = int(curr_c["Grocery"].iloc[0]), int(curr_c["Frozen"].iloc[0]), max(1, int(curr_c["Staff"].iloc[0]))
+    w = bool(curr_c["Weather_Alert"].iloc[0])
+    l_s = curr_s[(curr_s["Active"] == 1) & (curr_s["Name"] != "Unassigned")]["Name"].tolist()
 
-    curr_g_pcs = int(curr_c_df["Grocery"].iloc[0]) if not curr_c_df.empty else 0
-    curr_f_pcs = int(curr_c_df["Frozen"].iloc[0]) if not curr_c_df.empty else 0
-    curr_staff = max(1, int(curr_c_df["Staff"].iloc[0])) if not curr_c_df.empty else 1
-    curr_weather = bool(curr_c_df["Weather_Alert"].iloc[0]) if not curr_c_df.empty else False
-    
-    live_cph = 55.0
-    if not live_set_df.empty:
-        cph_val = live_set_df.loc[live_set_df["Setting_Name"] == "Cases_Per_Hour", "Setting_Value"]
-        if not cph_val.empty: live_cph = max(1.0, float(cph_val.iloc[0])) # Absolute floor prevents div-by-zero
-    
-    live_active_staff = curr_staff_df[(curr_staff_df["Active"] == 1) & (curr_staff_df["Name"] != "Unassigned")]["Name"].tolist() if not curr_staff_df.empty else []
-
-    total_pcs = curr_g_pcs + curr_f_pcs
-    freight_hours = total_pcs / live_cph
-
-    open_t = t_df[t_df["Status"] == "Open"].copy() if not t_df.empty and "Status" in t_df.columns else pd.DataFrame()
-    task_mins = pd.to_numeric(open_t["Est_Mins"], errors='coerce').fillna(15).sum() if not open_t.empty else 0
-    task_hours = task_mins / 60.0
-
-    total_hours_needed = (freight_hours + task_hours) / curr_staff
-    completion_time = (curr_now + timedelta(hours=total_hours_needed)).strftime('%I:%M %p') if (total_pcs > 0 or task_mins > 0) else "N/A"
+    total_pcs = g + f
+    f_hrs = total_pcs / cph
+    open_tasks = t_df[t_df["Status"] == "Open"].copy()
+    t_mins = pd.to_numeric(open_tasks["Est_Mins"], errors='coerce').fillna(15).sum()
+    total_hrs = (f_hrs + (t_mins / 60.0)) / s
+    eta = (curr_now + timedelta(hours=total_hrs)).strftime('%I:%M %p') if (total_pcs > 0 or t_mins > 0) else "N/A"
 
     st.markdown(f"""
     <div class='kpi-container'>
         <div class='kpi-box'><div class='kpi-label'>Load Total</div><div class='kpi-value'>{total_pcs} Pcs</div></div>
-        <div class='kpi-box'><div class='kpi-label'>Active Staff</div><div class='kpi-value'>{curr_staff}</div></div>
-        <div class='kpi-box'><div class='kpi-label'>Task Workload</div><div class='kpi-value'>{int(task_mins)} Mins</div></div>
-        <div class='kpi-box {'urgent' if total_hours_needed > 7.5 else ''}'><div class='kpi-label'>Time to Complete</div><div class='kpi-value'>{round(total_hours_needed,1)} Hrs</div></div>
-        <div class='kpi-box'><div class='kpi-label'>True ETA</div><div class='kpi-value' style='color:#00e676;'>{completion_time}</div></div>
-        <div class='kpi-box {'urgent' if curr_weather else ''}'><div class='kpi-label'>Weather</div><div class='kpi-value'>{'SNOW' if curr_weather else 'CLEAR'}</div></div>
+        <div class='kpi-box'><div class='kpi-label'>Staff</div><div class='kpi-value'>{s}</div></div>
+        <div class='kpi-box'><div class='kpi-label'>Tasks</div><div class='kpi-value'>{int(t_mins)} Mins</div></div>
+        <div class='kpi-box {'urgent' if total_hrs > 7.5 else ''}'><div class='kpi-label'>Needed</div><div class='kpi-value'>{round(total_hrs,1)} Hrs</div></div>
+        <div class='kpi-box'><div class='kpi-label'>True ETA</div><div class='kpi-value' style='color:#00e676;'>{eta}</div></div>
+        <div class='kpi-box {'urgent' if w else ''}'><div class='kpi-label'>Weather</div><div class='kpi-value'>{'SNOW' if w else 'CLEAR'}</div></div>
     </div>
     """, unsafe_allow_html=True)
 
-    col_L, col_R = st.columns([0.65, 0.35])
+    L, R = st.columns([0.65, 0.35])
+    with L:
+        st.markdown("<div class='sect-header'>Tasks</div>", unsafe_allow_html=True)
+        if open_tasks.empty: st.success("All tasks complete!")
+        for _, r in open_tasks.iterrows():
+            c1, c2, c3 = st.columns([0.6, 0.25, 0.15])
+            c1.markdown(f"<div class='data-card {'data-urgent' if r['Priority'] == 'Urgent' else ''}'><div><strong>[{r['Zone']}]</strong> {html.escape(r['Task_Detail'])} <em>({r['Est_Mins']}m)</em><br><span class='assign-text'>OWNER: {r['Assigned_To']}</span></div></div>", unsafe_allow_html=True)
+            opts = ["Unassigned"] + l_s
+            if r['Assigned_To'] not in opts: opts.append(r['Assigned_To'])
+            st.selectbox("Ass", opts, index=opts.index(r['Assigned_To']), key=f"sel_{r['Task_ID']}", label_visibility="collapsed", on_change=handle_assign_callback, args=(r['Task_ID'], f"sel_{r['Task_ID']}"))
+            c3.button("DONE", key=f"dn_{r['Task_ID']}", on_click=complete_task, args=(r['Task_ID'], active_op))
 
-    with col_L:
-        st.markdown("<div class='sect-header'>Active Shift Tasks</div>", unsafe_allow_html=True)
-        if open_t.empty: st.success("ALL TASKS COMPLETE")
-        else:
-            for _, r in open_t.iterrows():
-                c1, c2, c3 = st.columns([0.6, 0.25, 0.15])
-                p_style = "data-urgent" if r['Priority'] == "Urgent" else ""
-                c1.markdown(f"<div class='data-card {p_style}'><div><strong>[{r['Zone']}]</strong> {html.escape(r['Task_Detail'])} <em>({r['Est_Mins']}m)</em><br><span class='assign-text'>OWNER: {r['Assigned_To']}</span></div></div>", unsafe_allow_html=True)
-                
-                assign_opts = ["Unassigned"] + live_active_staff
-                if pd.notna(r['Assigned_To']) and r['Assigned_To'] not in assign_opts and str(r['Assigned_To']).strip() != "":
-                    assign_opts.append(r['Assigned_To'])
-                    
-                curr_owner = r['Assigned_To'] if r['Assigned_To'] in assign_opts else "Unassigned"
-                w_key = f"sel_{r['Task_ID']}" 
-                safe_index = assign_opts.index(curr_owner) if curr_owner in assign_opts else 0
-                
-                c2.selectbox("Assign", assign_opts, index=safe_index, key=w_key, label_visibility="collapsed", on_change=handle_assign_callback, args=(r['Task_ID'], w_key))
-                c3.button("DONE", key=f"dn_{r['Task_ID']}", on_click=complete_task, args=(r['Task_ID'], active_op))
-
+        st.markdown("<div class='sect-header'>Orders & Freight</div>", unsafe_allow_html=True)
         c1, c2 = st.columns(2)
         with c1:
-            st.markdown("<div class='sect-header'>Customer Orders</div>", unsafe_allow_html=True)
-            open_s = s_df[s_df["Status"] == "Open"] if not s_df.empty and "Status" in s_df.columns else pd.DataFrame()
-            if open_s.empty: st.caption("No pending requests.")
-            for _, r in open_s.iterrows():
-                cx, cy = st.columns([0.75, 0.25])
-                cx.markdown(f"<div class='data-card' style='border-left-color:#a855f7; padding:8px;'><div><strong>📍 Location {r['Location']}</strong><br>{html.escape(r['Item'])}<br><span style='color:#a855f7; font-size:12px;'>👤 {html.escape(r['Customer'])}</span></div></div>", unsafe_allow_html=True)
-                cy.button("P/U", key=f"s_{r['Order_ID']}", on_click=complete_special_order, args=(r['Order_ID'], active_op))
-
+            os = s_df[s_df["Status"] == "Open"]
+            for _, r in os.iterrows():
+                st.markdown(f"<div class='data-card' style='border-left-color:#a855f7;'><div><strong>Loc {r['Location']}</strong>: {html.escape(r['Item'])}<br><small>{html.escape(r['Customer'])}</small></div></div>", unsafe_allow_html=True)
+                st.button("PU", key=f"s_{r['Order_ID']}", on_click=complete_special_order, args=(r['Order_ID'], active_op))
         with c2:
-            st.markdown("<div class='sect-header'>Expected Inbound</div>", unsafe_allow_html=True)
-            open_e = e_df[e_df["Status"] == "Pending"] if not e_df.empty and "Status" in e_df.columns else pd.DataFrame()
-            if open_e.empty: st.caption("No expected freight logged.")
-            for _, r in open_e.iterrows():
-                cx, cy = st.columns([0.75, 0.25])
-                cx.markdown(f"<div class='data-card' style='border-left-color:#f59e0b; padding:8px;'><div>🚚 <strong>{html.escape(r['Vendor'])}</strong></div></div>", unsafe_allow_html=True)
-                cy.button("RCV", key=f"e_{r['Exp_ID']}", on_click=complete_expected_order, args=(r['Exp_ID'], active_op))
+            es = e_df[e_df["Status"] == "Pending"]
+            for _, r in es.iterrows():
+                st.markdown(f"<div class='data-card' style='border-left-color:#f59e0b;'><div>🚚 <strong>{html.escape(r['Vendor'])}</strong></div></div>", unsafe_allow_html=True)
+                st.button("RCV", key=f"e_{r['Exp_ID']}", on_click=complete_expected_order, args=(r['Exp_ID'], active_op))
 
-    with col_R:
-        st.markdown("<div class='sect-header'>OOS Flags (Shelf Holes)</div>", unsafe_allow_html=True)
-        open_o = oos_df[oos_df["Status"] == "Open"] if not oos_df.empty and "Status" in oos_df.columns else pd.DataFrame()
-        if open_o.empty: st.caption("No holes reported.")
-        for _, r in open_o.iterrows():
-            c1, c2 = st.columns([0.8, 0.2])
-            notes_html = f"<br><span style='color:#ef4444; font-size:12px;'>Notes: {html.escape(r['Notes'])}</span>" if pd.notna(r['Notes']) and str(r['Notes']).strip() else ""
-            c1.markdown(f"<div class='data-card data-urgent' style='padding:8px;'><div><strong>{r['Zone']}:</strong> {r['Hole_Count']} Holes {notes_html}</div></div>", unsafe_allow_html=True)
-            c2.button("CLR", key=f"o_{r['OOS_ID']}", on_click=complete_oos, args=(r['OOS_ID'], active_op))
+    with R:
+        st.markdown("<div class='sect-header'>Shelf Holes (OOS)</div>", unsafe_allow_html=True)
+        os = oos_df[oos_df["Status"] == "Open"]
+        for _, r in os.iterrows():
+            st.markdown(f"<div class='data-card data-urgent'><div><strong>{r['Zone']}</strong>: {r['Hole_Count']} Holes<br><small>{html.escape(r['Notes'])}</small></div></div>", unsafe_allow_html=True)
+            st.button("CLR", key=f"o_{r['OOS_ID']}", on_click=complete_oos, args=(r['OOS_ID'], active_op))
 
         st.divider()
-        if st.button("🚀 Auto-Load Daily Rhythm"):
+        if st.button("🚀 Load Rhythm"):
             with get_db() as conn:
                 cur = conn.cursor()
-                dynamic_tgp_time = int((((curr_g_pcs + curr_f_pcs) / live_cph) / curr_staff) * 60) if (curr_g_pcs + curr_f_pcs) > 0 else 120
-                directives = [
-                    {"Task": "5-Minute Direction Huddle", "Priority": "Urgent", "Zone": "General", "Time": 5},
-                    {"Task": "Store Walk & Documentation", "Priority": "High", "Zone": "General", "Time": 30}
-                ]
-                if curr_weather: directives.append({"Task": "URGENT: Snow Removal/Salt", "Priority": "Urgent", "Zone": "Outside", "Time": 20})
-                if curr_day in ["Sunday", "Tuesday", "Thursday"]: directives.append({"Task": "TGP Order", "Priority": "Urgent", "Zone": "Receiving", "Time": dynamic_tgp_time})
-                if curr_day == "Sunday": directives.append({"Task": "Build Displays (16hr budget)", "Priority": "High", "Zone": "General", "Time": 960})
-                if curr_day == "Wednesday": directives.append({"Task": "PRIMARY AD CHANGEOVER", "Priority": "Urgent", "Zone": "General", "Time": 240})
-                if curr_day == "Friday": directives.append({"Task": "Finalize Weekend Coverage", "Priority": "High", "Zone": "General", "Time": 60})
-
-                inserted_tasks = 0
-                for d in directives:
-                    try:
-                        cur.execute("INSERT INTO tasks VALUES (?, ?, 'Open', ?, ?, 'Unassigned', ?, ?, '', '')", 
-                                     (gen_id(), d["Task"], d["Priority"], d["Zone"], d["Time"], get_utc_now()))
-                        inserted_tasks += 1
-                    except sqlite3.IntegrityError: pass 
+                hrs = (((g + f) / cph) / s) * 60 if (g + f) > 0 else 120
+                ds = [{"Task": "Direction Huddle", "P": "Urgent", "Z": "General", "T": 5}, {"Task": "Store Walk", "P": "High", "Z": "General", "T": 30}]
+                if w: ds.append({"Task": "Snow/Salt", "P": "Urgent", "Z": "Outside", "T": 20})
+                if curr_now.strftime('%A') in ["Sunday", "Tuesday", "Thursday"]: ds.append({"Task": "TGP Order", "P": "Urgent", "Z": "Receiving", "T": int(hrs)})
                 
-                inserted_vendors = 0
-                today_vendors = VENDOR_SCHEDULE.get(curr_day, [])
-                for v in today_vendors:
+                i_t = 0
+                for d in ds:
                     try:
-                        cur.execute("INSERT INTO expected_orders VALUES (?, ?, ?, 'Pending', 'AUTO', '', '')", 
-                                     (gen_id(), v, curr_day))
-                        inserted_vendors += 1
+                        cur.execute("INSERT INTO tasks VALUES (?, ?, 'Open', ?, ?, 'Unassigned', ?, ?, '', '')", (gen_id(), d["Task"], d["P"], d["Z"], d["T"], get_utc_now()))
+                        i_t += 1
                     except sqlite3.IntegrityError: pass
                 
-                _internal_audit(cur, f"Auto-Load Complete: {inserted_tasks} tasks, {inserted_vendors} vendors")
+                i_v = 0
+                for v in V_S.get(curr_now.strftime('%A'), []):
+                    try:
+                        cur.execute("INSERT INTO expected_orders VALUES (?, ?, ?, 'Pending', 'AUTO', '', '')", (gen_id(), v, curr_now.strftime('%A')))
+                        i_v += 1
+                    except sqlite3.IntegrityError: pass
+                _internal_audit(cur, f"Rhythm: {i_t} tasks, {i_v} vendors")
             st.rerun()
 
-    # --- LIVE MULTI-TICKER (BOTTOM) ---
-    live_tk = tk_df.dropna(subset=["Message"])
-    if not live_tk.empty:
-        msgs = " &nbsp;&nbsp;&nbsp;&nbsp; 🛑 &nbsp;&nbsp;&nbsp;&nbsp; ".join(live_tk["Message"].astype(str).tolist())
-        repeated_ticker = f"📢 {msgs} &nbsp;&nbsp;&nbsp;&nbsp; 🛑 &nbsp;&nbsp;&nbsp;&nbsp; " * 5
-        st.markdown(f"<div class='ticker-wrap'><div class='ticker'>{repeated_ticker}</div></div>", unsafe_allow_html=True)
+    if not tk_df.empty:
+        m = " &nbsp;&nbsp;&nbsp;&nbsp; 🛑 &nbsp;&nbsp;&nbsp;&nbsp; ".join(tk_df["Message"].astype(str).tolist())
+        st.markdown(f"<div class='ticker-wrap'><div class='ticker'>📢 {m} &nbsp;&nbsp;&nbsp;&nbsp; 🛑 &nbsp;&nbsp;&nbsp;&nbsp; </div></div>", unsafe_allow_html=True)
 
-# --- DISPLAY LOGIC (TV VS MOBILE) ---
 @st.fragment(run_every=3)
-def auto_refresh_board():
-    render_main_board()
+def auto_refresh(): render_main_board()
 
-if is_tv_mode:
-    auto_refresh_board()
-else:
-    render_main_board()
+if is_tv_mode: auto_refresh()
+else: render_main_board()
