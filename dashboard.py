@@ -70,6 +70,7 @@ for f, cols in DB_SCHEMA.items():
 def load_data(f): return pd.read_csv(f)
 def save_data(df, f): df.to_csv(f, index=False)
 
+# --- ACTIONS & CALLBACKS (Now mathematically bulletproof) ---
 def log_audit(event):
     df = load_data("audit.csv")
     new_id = 1 if df.empty else df["Log_ID"].max() + 1
@@ -78,29 +79,35 @@ def log_audit(event):
 
 def assign_task(task_id, staff_name):
     df = load_data("tasks.csv")
-    df.loc[df["Task_ID"] == task_id, "Assigned_To"] = staff_name
+    df.loc[pd.to_numeric(df["Task_ID"], errors='coerce') == float(task_id), "Assigned_To"] = staff_name
     save_data(df, "tasks.csv")
     log_audit(f"Task #{task_id} assigned to {staff_name}")
 
 def complete_task(task_id, premium_user, assigned_user):
     df = load_data("tasks.csv")
-    df.loc[df["Task_ID"] == task_id, "Status"] = "Closed"
+    df.loc[pd.to_numeric(df["Task_ID"], errors='coerce') == float(task_id), "Status"] = "Closed"
     df["Closed_By"] = df["Closed_By"].astype(object)
     df["Time_Closed"] = df["Time_Closed"].astype(object)
-    df.loc[df["Task_ID"] == task_id, ["Closed_By", "Time_Closed"]] = [premium_user, f_time(get_now())]
+    df.loc[pd.to_numeric(df["Task_ID"], errors='coerce') == float(task_id), ["Closed_By", "Time_Closed"]] = [premium_user, f_time(get_now())]
     save_data(df, "tasks.csv")
     worker = assigned_user if assigned_user and assigned_user != "Unassigned" else "the Team"
     log_audit(f"Task completed by {worker} (Verified by {premium_user})")
 
 def execute_action(file, id_col, item_id, user=None):
     df = load_data(file)
-    df.loc[df[id_col] == item_id, "Status"] = "Closed"
+    df.loc[pd.to_numeric(df[id_col], errors='coerce') == float(item_id), "Status"] = "Closed"
     if "Closed_By" in df.columns:
         df["Closed_By"] = df["Closed_By"].astype(object)
         df["Time_Closed"] = df["Time_Closed"].astype(object)
-        df.loc[df[id_col] == item_id, ["Closed_By", "Time_Closed"]] = [user, f_time(get_now())]
+        df.loc[pd.to_numeric(df[id_col], errors='coerce') == float(item_id), ["Closed_By", "Time_Closed"]] = [user, f_time(get_now())]
     save_data(df, file)
     log_audit(f"Cleared {id_col.replace('_ID','')} #{item_id}")
+
+def delete_ticker(msg_id):
+    df = load_data("ticker.csv")
+    df = df[pd.to_numeric(df["Msg_ID"], errors='coerce') != float(msg_id)]
+    save_data(df, "ticker.csv")
+    log_audit("Broadcast message cleared")
 
 def safe_int(df, col, default=0):
     if df.empty or col not in df.columns: return default
@@ -200,8 +207,8 @@ with st.sidebar:
         for _, r in tk_df.iterrows():
             c1, c2 = st.columns([0.85, 0.15])
             c1.caption(f"📢 {r['Message']}")
-            if c2.button("X", key=f"tk_{r['Msg_ID']}"):
-                save_data(tk_df[tk_df["Msg_ID"] != r['Msg_ID']], "ticker.csv"); st.rerun()
+            # Use on_click callback instead of 'if button:'
+            c2.button("X", key=f"tk_{r['Msg_ID']}", on_click=delete_ticker, args=(r['Msg_ID'],))
 
     st.divider()
     st.markdown("**2. Deploy Task**")
@@ -360,8 +367,8 @@ def live_tv_board():
                 if new_owner != "Assign...":
                     assign_task(r['Task_ID'], new_owner); st.rerun()
                 
-                if c3.button("DONE", key=f"dn_{r['Task_ID']}"):
-                    complete_task(r['Task_ID'], active_op, r['Assigned_To']); st.rerun()
+                # Use on_click callback
+                c3.button("DONE", key=f"dn_{r['Task_ID']}", on_click=complete_task, args=(r['Task_ID'], active_op, r['Assigned_To']))
 
         c1, c2 = st.columns(2)
         with c1:
@@ -371,7 +378,8 @@ def live_tv_board():
             for _, r in open_s.iterrows():
                 cx, cy = st.columns([0.75, 0.25])
                 cx.markdown(f"<div class='data-card' style='border-left-color:#a855f7; padding:8px;'><div><strong>📍 Location {r['Location']}</strong><br>{r['Item']}<br><span style='color:#a855f7; font-size:12px;'>👤 {r['Customer']}</span></div></div>", unsafe_allow_html=True)
-                if cy.button("P/U", key=f"s_{r['Order_ID']}"): execute_action("special_orders.csv", "Order_ID", r['Order_ID'], active_op); st.rerun()
+                # Use on_click callback
+                cy.button("P/U", key=f"s_{r['Order_ID']}", on_click=execute_action, args=("special_orders.csv", "Order_ID", r['Order_ID'], active_op))
 
         with c2:
             st.markdown("<div class='sect-header'>Expected Inbound</div>", unsafe_allow_html=True)
@@ -380,7 +388,8 @@ def live_tv_board():
             for _, r in open_e.iterrows():
                 cx, cy = st.columns([0.75, 0.25])
                 cx.markdown(f"<div class='data-card' style='border-left-color:#f59e0b; padding:8px;'><div>🚚 <strong>{r['Vendor']}</strong></div></div>", unsafe_allow_html=True)
-                if cy.button("RCV", key=f"e_{r['Exp_ID']}"): execute_action("expected_orders.csv", "Exp_ID", r['Exp_ID'], active_op); st.rerun()
+                # Use on_click callback
+                cy.button("RCV", key=f"e_{r['Exp_ID']}", on_click=execute_action, args=("expected_orders.csv", "Exp_ID", r['Exp_ID'], active_op))
 
     with col_R:
         st.markdown("<div class='sect-header'>OOS Flags (Shelf Holes)</div>", unsafe_allow_html=True)
@@ -390,7 +399,8 @@ def live_tv_board():
             c1, c2 = st.columns([0.8, 0.2])
             notes_html = f"<br><span style='color:#ef4444; font-size:12px;'>Notes: {r['Notes']}</span>" if r['Notes'] else ""
             c1.markdown(f"<div class='data-card data-urgent' style='padding:8px;'><div><strong>{r['Zone']}:</strong> {r['Hole_Count']} Holes {notes_html}</div></div>", unsafe_allow_html=True)
-            if c2.button("CLR", key=f"o_{r['OOS_ID']}"): execute_action("oos.csv", "OOS_ID", r['OOS_ID'], active_op); st.rerun()
+            # Use on_click callback
+            c2.button("CLR", key=f"o_{r['OOS_ID']}", on_click=execute_action, args=("oos.csv", "OOS_ID", r['OOS_ID'], active_op))
 
         st.divider()
         if st.button("🚀 Auto-Load Daily Rhythm"):
