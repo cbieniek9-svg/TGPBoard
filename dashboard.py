@@ -14,10 +14,17 @@ except ImportError:
     import pytz
     LOCAL_TZ = pytz.timezone("America/Edmonton")
 
-def get_utc_now(): return datetime.now(timezone.utc).isoformat()
-def get_local_now(): return datetime.now(LOCAL_TZ)
-def get_pin_hash(pin_str): return hashlib.sha256(str(pin_str).encode()).hexdigest()
-def gen_id(): return str(uuid.uuid4().hex)
+def get_utc_now():
+    return datetime.now(timezone.utc).isoformat()
+
+def get_local_now():
+    return datetime.now(LOCAL_TZ)
+
+def get_pin_hash(pin_str):
+    return hashlib.sha256(str(pin_str).encode()).hexdigest()
+
+def gen_id():
+    return str(uuid.uuid4().hex)
 
 DB_FILE = "tgp_board.db"
 
@@ -63,8 +70,10 @@ def init_db():
                         (OOS_ID TEXT PRIMARY KEY, Zone TEXT, Hole_Count INTEGER, Notes TEXT, 
                          Status TEXT, Logged_By TEXT, Time_Logged TEXT, Closed_By TEXT, Time_Closed TEXT)''')
         
-        try: conn.execute("SELECT ID FROM counts")
-        except sqlite3.OperationalError: conn.execute("DROP TABLE IF EXISTS counts")
+        try:
+            conn.execute("SELECT ID FROM counts")
+        except sqlite3.OperationalError:
+            conn.execute("DROP TABLE IF EXISTS counts")
         
         conn.execute('''CREATE TABLE IF NOT EXISTS counts
                         (ID INTEGER PRIMARY KEY CHECK (ID = 1), Grocery INTEGER, Frozen INTEGER, 
@@ -90,18 +99,24 @@ def init_db():
         conn.execute("CREATE INDEX IF NOT EXISTS idx_orders_status ON special_orders(Status)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_expected_status ON expected_orders(Status)")
         
-        # Constraints to prevent duplicate Daily Rhythm loads
-        try: conn.execute("CREATE UNIQUE INDEX idx_tasks_unique_open ON tasks(Task_Detail) WHERE Status = 'Open'")
-        except sqlite3.OperationalError: pass
-        try: conn.execute("CREATE UNIQUE INDEX idx_exp_unique_pending ON expected_orders(Vendor) WHERE Status = 'Pending'")
-        except sqlite3.OperationalError: pass
+        try:
+            conn.execute("CREATE UNIQUE INDEX idx_tasks_unique_open ON tasks(Task_Detail) WHERE Status = 'Open'")
+        except sqlite3.OperationalError:
+            pass
+            
+        try:
+            conn.execute("CREATE UNIQUE INDEX idx_exp_unique_pending ON expected_orders(Vendor) WHERE Status = 'Pending'")
+        except sqlite3.OperationalError:
+            pass
 
         # Seed Defaults
         if conn.execute("SELECT COUNT(*) FROM counts").fetchone()[0] == 0:
             conn.execute("INSERT INTO counts VALUES (1, 0, 0, 1, ?, 0, '')", (get_utc_now(),))
+            
         if conn.execute("SELECT COUNT(*) FROM staff").fetchone()[0] == 0:
             conn.executemany("INSERT INTO staff VALUES (?, ?)", [("John", 1), ("Sarah", 1), ("Mike", 1), ("Emily", 1)])
             conn.execute("INSERT INTO staff VALUES ('Unassigned', 1)") 
+            
         if conn.execute("SELECT COUNT(*) FROM settings").fetchone()[0] == 0:
             conn.executemany("INSERT INTO settings VALUES (?, ?)", [
                 ("Cases_Per_Hour", "55"), 
@@ -118,7 +133,8 @@ def _internal_audit(cur, event):
 
 def _strict_update(cur, query, params):
     cur.execute(query, params)
-    if cur.rowcount != 1: raise ValueError("Transaction failed: Target record not found or duplicate.")
+    if cur.rowcount != 1:
+        raise ValueError("Transaction failed: Target record not found or duplicate.")
 
 def assign_task(task_id, staff_name):
     with get_db() as conn:
@@ -128,15 +144,19 @@ def assign_task(task_id, staff_name):
 
 def handle_assign_callback(task_id, widget_key):
     new_owner = st.session_state.get(widget_key, "Unassigned")
-    try: assign_task(task_id, new_owner)
-    except Exception as e: st.error(f"Assignment failed: {e}")
+    try:
+        assign_task(task_id, new_owner)
+    except Exception as e:
+        st.error(f"Assignment failed: {e}")
 
 def complete_task(task_id, premium_user):
     with get_db() as conn:
         cur = conn.cursor()
         cur.execute("SELECT Assigned_To FROM tasks WHERE Task_ID = ?", (str(task_id),))
         row = cur.fetchone()
-        if not row: raise ValueError(f"Task {task_id} not found.")
+        if not row:
+            raise ValueError(f"Task {task_id} not found.")
+            
         worker = row[0] if row[0] not in ["", "Unassigned", None] else "the Team"
         _strict_update(cur, "UPDATE tasks SET Status = 'Closed', Closed_By = ?, Time_Closed = ? WHERE Task_ID = ?", 
                      (premium_user, get_utc_now(), str(task_id)))
@@ -226,19 +246,22 @@ staff_count = max(1, int(c_df["Staff"].iloc[0])) if not c_df.empty else 1
 master_staff = staff_df[staff_df["Name"] != "Unassigned"]["Name"].tolist() if not staff_df.empty else []
 active_staff = staff_df[(staff_df["Active"] == 1) & (staff_df["Name"] != "Unassigned")]["Name"].tolist() if not staff_df.empty else []
 
-admin_pin_hash = get_pin_hash("1234") # Default fallback if DB is blank
+admin_pin_hash = ""
 global_tv_active = False
 cases_per_hour = 55.0
 
 if not set_df.empty:
     pin_val = set_df.loc[set_df["Setting_Name"] == "Admin_PIN", "Setting_Value"]
-    if not pin_val.empty: admin_pin_hash = pin_val.iloc[0]
+    if not pin_val.empty:
+        admin_pin_hash = pin_val.iloc[0]
     
     tv_val = set_df.loc[set_df["Setting_Name"] == "Global_TV_Mode", "Setting_Value"]
-    if not tv_val.empty: global_tv_active = (tv_val.iloc[0] == "1")
+    if not tv_val.empty:
+        global_tv_active = (tv_val.iloc[0] == "1")
     
     cph_val = set_df.loc[set_df["Setting_Name"] == "Cases_Per_Hour", "Setting_Value"]
-    if not cph_val.empty: cases_per_hour = float(cph_val.iloc[0])
+    if not cph_val.empty:
+        cases_per_hour = float(cph_val.iloc[0])
 
 # Determine if the 2-second refresh loop should run
 should_auto_refresh = is_tv_url_mode or global_tv_active or st.session_state.get("tv_toggle", False)
@@ -253,17 +276,20 @@ with st.sidebar:
     # Global Master Switch (Controls the floor TV from your phone)
     if global_tv_active:
         if st.button("🔴 STOP ALL AUTO-REFRESH", type="primary"):
-            with get_db() as conn: conn.execute("UPDATE settings SET Setting_Value = '0' WHERE Setting_Name = 'Global_TV_Mode'")
+            with get_db() as conn:
+                conn.execute("UPDATE settings SET Setting_Value = '0' WHERE Setting_Name = 'Global_TV_Mode'")
             st.rerun()
     else:
         if st.button("🚀 FORCE ALL SCREENS TO TV MODE", type="secondary"):
-            with get_db() as conn: conn.execute("UPDATE settings SET Setting_Value = '1' WHERE Setting_Name = 'Global_TV_Mode'")
+            with get_db() as conn:
+                conn.execute("UPDATE settings SET Setting_Value = '1' WHERE Setting_Name = 'Global_TV_Mode'")
             st.rerun()
 
     active_op = st.selectbox("Premium Operator:", PREMIUM_STAFF)
     
     if not should_auto_refresh:
-        if st.button("🔄 Sync Board Now"): st.rerun()
+        if st.button("🔄 Sync Board Now"):
+            st.rerun()
 
     with st.expander("👥 Shift Roster Settings"):
         st.caption("Select floor staff working today.")
@@ -380,8 +406,4 @@ with st.sidebar:
     with st.expander("🛡️ Admin Console"):
         pin = st.text_input("Admin PIN", type="password")
         if pin and admin_pin_hash and get_pin_hash(pin) == admin_pin_hash:
-            st.success("Admin Unlocked")
-            
-            st.markdown("**System Settings**")
-            with st.form("metric_form"):
-  
+           
