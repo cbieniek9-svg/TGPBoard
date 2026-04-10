@@ -3,14 +3,17 @@ import pandas as pd
 import os
 from datetime import datetime, timedelta, timezone
 
-# --- BOARD CONFIGURATION ---
-st.set_page_config(page_title="TGP Comm Board", layout="wide", initial_sidebar_state="collapsed")
-
-# --- ENGINE ---
-def get_now(): 
-    return datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(hours=6)
+# Safely handle Timezones for Edmonton (Accounts for Daylight Saving Time)
+try:
+    from zoneinfo import ZoneInfo
+    def get_now(): return datetime.now(ZoneInfo("America/Edmonton")).replace(tzinfo=None)
+except:
+    def get_now(): return datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(hours=6)
 
 def f_time(dt): return dt.strftime("%Y-%m-%d %H:%M:%S")
+
+# --- BOARD CONFIGURATION ---
+st.set_page_config(page_title="TGP Comm Board", layout="wide", initial_sidebar_state="collapsed")
 
 # --- DATABASE ARCHITECTURE ---
 DB_SCHEMA = {
@@ -38,19 +41,14 @@ VENDOR_SCHEDULE = {
 
 # --- PREMIUM SUPERVISORS ---
 PREMIUM_STAFF = ["Chris", "Ashley", "Luke", "Chandler"]
-
-# --- ORDER LOCATIONS ---
 ORDER_LOCATIONS = ["1", "2", "3", "22"]
 
 # --- DATA INITIALIZATION & PATCHING ---
 for f, cols in DB_SCHEMA.items():
     if not os.path.exists(f):
-        if f == "counts.csv":
-            pd.DataFrame({"Grocery": [0], "Frozen": [0], "Staff": [1], "Last_Update": [f_time(get_now())], "Weather_Alert": [False], "Ticker_Msg": [""]}).to_csv(f, index=False)
-        elif f == "staff.csv":
-            pd.DataFrame({"Name": ["John", "Sarah", "Mike", "Emily"], "Active": [True, True, True, True]}).to_csv(f, index=False)
-        elif f == "settings.csv":
-            pd.DataFrame({"Setting_Name": ["Cases_Per_Hour"], "Setting_Value": ["55"]}).to_csv(f, index=False)
+        if f == "counts.csv": pd.DataFrame({"Grocery": [0], "Frozen": [0], "Staff": [1], "Last_Update": [f_time(get_now())], "Weather_Alert": [False], "Ticker_Msg": [""]}).to_csv(f, index=False)
+        elif f == "staff.csv": pd.DataFrame({"Name": ["John", "Sarah", "Mike", "Emily"], "Active": [True, True, True, True]}).to_csv(f, index=False)
+        elif f == "settings.csv": pd.DataFrame({"Setting_Name": ["Cases_Per_Hour"], "Setting_Value": ["55"]}).to_csv(f, index=False)
         else: pd.DataFrame(columns=cols).to_csv(f, index=False)
     else:
         try:
@@ -83,6 +81,11 @@ def assign_task(task_id, staff_name):
     save_data(df, "tasks.csv")
     log_audit(f"Task #{task_id} assigned to {staff_name}")
 
+# HARDENED: Callback wrapper to prevent infinite loops in selectboxes
+def handle_assign_callback(task_id, widget_key):
+    new_owner = st.session_state[widget_key]
+    assign_task(task_id, new_owner)
+
 def complete_task(task_id, premium_user, assigned_user):
     df = load_data("tasks.csv")
     df.loc[pd.to_numeric(df["Task_ID"], errors='coerce') == float(task_id), "Status"] = "Closed"
@@ -110,36 +113,23 @@ def delete_ticker(msg_id):
     save_data(df, "ticker.csv")
     log_audit("Broadcast message cleared")
 
-# HARDENED: Bulletproof DB Reconstruction
 def execute_eod_reset():
     _t = load_data("tasks.csv")
     _s = load_data("special_orders.csv")
     _e = load_data("expected_orders.csv")
 
-    # Filter open tasks, or completely rebuild if corrupted
-    if not _t.empty and "Status" in _t.columns: 
-        save_data(_t[_t["Status"] == "Open"], "tasks.csv")
-    else: 
-        save_data(pd.DataFrame(columns=DB_SCHEMA["tasks.csv"]), "tasks.csv")
+    if not _t.empty and "Status" in _t.columns: save_data(_t[_t["Status"] == "Open"], "tasks.csv")
+    else: save_data(pd.DataFrame(columns=DB_SCHEMA["tasks.csv"]), "tasks.csv")
 
-    # Fully Nuke OOS Database
     save_data(pd.DataFrame(columns=DB_SCHEMA["oos.csv"]), "oos.csv")
 
-    # Filter open orders, or completely rebuild if corrupted
-    if not _s.empty and "Status" in _s.columns: 
-        save_data(_s[_s["Status"] == "Open"], "special_orders.csv")
-    else: 
-        save_data(pd.DataFrame(columns=DB_SCHEMA["special_orders.csv"]), "special_orders.csv")
+    if not _s.empty and "Status" in _s.columns: save_data(_s[_s["Status"] == "Open"], "special_orders.csv")
+    else: save_data(pd.DataFrame(columns=DB_SCHEMA["special_orders.csv"]), "special_orders.csv")
 
-    # Filter pending vendors, or completely rebuild if corrupted
-    if not _e.empty and "Status" in _e.columns: 
-        save_data(_e[_e["Status"] == "Pending"], "expected_orders.csv")
-    else: 
-        save_data(pd.DataFrame(columns=DB_SCHEMA["expected_orders.csv"]), "expected_orders.csv")
+    if not _e.empty and "Status" in _e.columns: save_data(_e[_e["Status"] == "Pending"], "expected_orders.csv")
+    else: save_data(pd.DataFrame(columns=DB_SCHEMA["expected_orders.csv"]), "expected_orders.csv")
 
-    # Fully Nuke Tickers
     save_data(pd.DataFrame(columns=DB_SCHEMA["ticker.csv"]), "ticker.csv")
-    
     log_audit("EOD RESET COMPLETED by Admin")
 
 def safe_int(df, col, default=0):
@@ -158,12 +148,10 @@ footer {{ visibility: hidden; }}
 .stApp {{ background-color: #0b0f14; color: #d1d5db; }}
 
 /* --- TV LAYOUT (DEFAULT - LARGE SCREENS) --- */
-/* Hides the top bar entirely and adjusts padding to fit TV */
 header {{ visibility: hidden; }}
 .block-container {{ padding-top: 1rem; padding-bottom: 5rem; padding-left: 2rem; padding-right: 2rem; max-width: 100%; }}
 
 /* --- MOBILE LAYOUT (SMALL SCREENS) --- */
-/* Brings back the hamburger menu for phones and tablets */
 @media screen and (max-width: 1024px) {{
     header {{ visibility: visible; background-color: #0b0f14; }}
     .block-container {{ padding-top: 4rem; padding-left: 1rem; padding-right: 1rem; }}
@@ -214,7 +202,7 @@ with st.sidebar:
     if st.button("🔄 Sync Board"): st.rerun()
 
     with st.expander("👥 Shift Roster Settings (Floor Staff)"):
-        st.caption("Select floor staff working today. These names appear in the task Assign dropdowns.")
+        st.caption("Select floor staff working today.")
         selected_active = st.multiselect("Active Today:", master_staff, default=active_staff)
         if selected_active != active_staff:
             staff_df["Active"] = staff_df["Name"].isin(selected_active)
@@ -232,11 +220,8 @@ with st.sidebar:
     with st.form("ticker_add", clear_on_submit=True):
         new_msg = st.text_input("Add Ticker Message")
         if st.form_submit_button("Broadcast") and new_msg:
-            if tk_df.empty or pd.isna(tk_df["Msg_ID"].max()):
-                new_id = 1
-            else:
-                new_id = int(tk_df["Msg_ID"].max()) + 1
-            
+            if tk_df.empty or pd.isna(tk_df["Msg_ID"].max()): new_id = 1
+            else: new_id = int(tk_df["Msg_ID"].max()) + 1
             save_data(pd.concat([tk_df, pd.DataFrame([{"Msg_ID": new_id, "Message": new_msg}])]), "ticker.csv")
             log_audit(f"Broadcast added: {new_msg}"); st.rerun()
             
@@ -333,13 +318,11 @@ with st.sidebar:
                 if st.form_submit_button("Delete"):
                     save_data(staff_df[staff_df["Name"] != del_staff], "staff.csv"); st.rerun()
 
-            # HARDENED: Locked inside a Streamlit Form to guarantee execution
             st.markdown("**Database Reset**")
             with st.form("eod_form"):
                 st.caption("⚠️ Purges closed tasks, holes, completed orders, and tickers.")
                 if st.form_submit_button("🌙 EXECUTE EOD RESET", type="primary"):
-                    execute_eod_reset()
-                    st.rerun()
+                    execute_eod_reset(); st.rerun()
         elif pin:
             st.error("Invalid PIN")
 
@@ -401,11 +384,13 @@ def live_tv_board():
                 p_style = "data-urgent" if r['Priority'] == "Urgent" else ""
                 c1.markdown(f"<div class='data-card {p_style}'><div><strong>[{r['Zone']}]</strong> {r['Task_Detail']} <em>({r['Est_Mins']}m)</em><br><span class='assign-text'>OWNER: {r['Assigned_To']}</span></div></div>", unsafe_allow_html=True)
                 
-                new_owner = c2.selectbox("Assign", ["Assign..."] + f_active_staff, key=f"sel_{r['Task_ID']}", label_visibility="collapsed")
-                if new_owner != "Assign...":
-                    assign_task(r['Task_ID'], new_owner); st.rerun()
+                # HARDENED: Prevents Infinite Rerun Loop
+                assign_opts = ["Unassigned"] + f_active_staff
+                curr_owner = r['Assigned_To'] if r['Assigned_To'] in assign_opts else "Unassigned"
+                w_key = f"sel_{r['Task_ID']}"
                 
-                c3.button("DONE", key=f"dn_{r['Task_ID']}", on_click=complete_task, args=(r['Task_ID'], active_op, r['Assigned_To']))
+                c2.selectbox("Assign", assign_opts, index=assign_opts.index(curr_owner), key=w_key, label_visibility="collapsed", on_change=handle_assign_callback, args=(r['Task_ID'], w_key))
+                c3.button("DONE", key=f"dn_{r['Task_ID']}", on_click=complete_task, args=(r['Task_ID'], active_op, curr_owner))
 
         c1, c2 = st.columns(2)
         with c1:
@@ -438,33 +423,29 @@ def live_tv_board():
 
         st.divider()
         if st.button("🚀 Auto-Load Daily Rhythm"):
-            dyn_g = safe_int(f_c_df, 'Grocery')
-            dyn_f = safe_int(f_c_df, 'Frozen')
-            dyn_s = max(1, safe_int(f_c_df, 'Staff', 1))
-            dyn_total = dyn_g + dyn_f
-            
-            dynamic_tgp_time = 120
-            if dyn_total > 0 and f_cases_per_hour > 0:
-                dynamic_tgp_time = int(((dyn_total / f_cases_per_hour) / dyn_s) * 60)
+            dyn_g, dyn_f, dyn_s = safe_int(f_c_df, 'Grocery'), safe_int(f_c_df, 'Frozen'), max(1, safe_int(f_c_df, 'Staff', 1))
+            dynamic_tgp_time = int((((dyn_g + dyn_f) / f_cases_per_hour) / dyn_s) * 60) if (dyn_g + dyn_f) > 0 and f_cases_per_hour > 0 else 120
 
             directives = [
                 {"Task": "5-Minute Direction Huddle", "Priority": "Urgent", "Zone": "General", "Time": 5},
                 {"Task": "Store Walk & Documentation", "Priority": "High", "Zone": "General", "Time": 30}
             ]
             if f_weather_active: directives.append({"Task": "URGENT: Snow Removal/Salt", "Priority": "Urgent", "Zone": "Outside", "Time": 20})
-            
             if curr_day in ["Sunday", "Tuesday", "Thursday"]: directives.append({"Task": "TGP Order", "Priority": "Urgent", "Zone": "Receiving", "Time": dynamic_tgp_time})
-            
             if curr_day == "Sunday": directives.append({"Task": "Build Displays (16hr budget)", "Priority": "High", "Zone": "General", "Time": 960})
             if curr_day == "Wednesday": directives.append({"Task": "PRIMARY AD CHANGEOVER", "Priority": "Urgent", "Zone": "General", "Time": 240})
             if curr_day == "Friday": directives.append({"Task": "Finalize Weekend Coverage", "Priority": "High", "Zone": "General", "Time": 60})
 
             curr_t = load_data("tasks.csv")
             new_t = []
+            
+            # HARDENED: Filter out Duplicate Task Generation
             for d in directives:
-                new_id = (curr_t["Task_ID"].max() if not curr_t.empty else 0) + len(new_t) + 1
-                new_t.append({"Task_ID": new_id, "Task_Detail": d["Task"], "Status": "Open", "Priority": d["Priority"], "Zone": d["Zone"], "Assigned_To": "Unassigned", "Est_Mins": d["Time"], "Time_Submitted": f_time(curr_now), "Closed_By": "", "Time_Closed": ""})
-            save_data(pd.concat([curr_t, pd.DataFrame(new_t)]), "tasks.csv")
+                if curr_t[(curr_t["Task_Detail"] == d["Task"]) & (curr_t["Status"] == "Open")].empty:
+                    new_id = (curr_t["Task_ID"].max() if not curr_t.empty else 0) + len(new_t) + 1
+                    new_t.append({"Task_ID": new_id, "Task_Detail": d["Task"], "Status": "Open", "Priority": d["Priority"], "Zone": d["Zone"], "Assigned_To": "Unassigned", "Est_Mins": d["Time"], "Time_Submitted": f_time(curr_now), "Closed_By": "", "Time_Closed": ""})
+            
+            if new_t: save_data(pd.concat([curr_t, pd.DataFrame(new_t)]), "tasks.csv")
             
             today_vendors = VENDOR_SCHEDULE.get(curr_day, [])
             curr_e = load_data("expected_orders.csv")
