@@ -234,7 +234,6 @@ with st.sidebar:
         f_pcs = st.number_input("Frozen Pcs", value=safe_int(c_df, 'Frozen'))
         staff_count = st.number_input("Active Staff", min_value=1, value=safe_int(c_df, 'Staff', 1))
         if st.form_submit_button("Calculate Labor"):
-            # HARDENED: Reconstructs the 1-row database completely to bypass strict type rules
             new_counts = pd.DataFrame([{
                 "Grocery": int(g_pcs), 
                 "Frozen": int(f_pcs), 
@@ -278,7 +277,6 @@ with st.sidebar:
 
     st.divider()
     if st.button("🌦️ Toggle Weather Alert"):
-        # HARDENED: Overwrite the whole column to avoid strict .loc errors
         c_df["Weather_Alert"] = not weather_active
         save_data(c_df, "counts.csv"); st.rerun()
 
@@ -317,7 +315,7 @@ with st.sidebar:
 
 
 # --- MAIN DASHBOARD (TV UI WITH AUTO-REFRESH) ---
-@st.fragment(run_every=10)
+@st.fragment(run_every=3)
 def live_tv_board():
     curr_now = get_now()
     curr_day = curr_now.strftime("%A")
@@ -338,7 +336,8 @@ def live_tv_board():
         try: f_cases_per_hour = float(f_set_df[f_set_df["Setting_Name"] == "Cases_Per_Hour"]["Setting_Value"].iloc[0])
         except: pass
 
-    st.markdown(f"<div class='header-bar'><div class='header-title'>TGP CENTRE STORE // {curr_day}</div><div style='color:#8b949e;'>{curr_now.strftime('%H:%M')}</div></div>", unsafe_allow_html=True)
+    # Time format changed to 12-hour AM/PM and made significantly larger
+    st.markdown(f"<div class='header-bar'><div class='header-title'>TGP CENTRE STORE // {curr_day}</div><div style='color:#8b949e; font-size: 32px; font-weight: bold;'>{curr_now.strftime('%I:%M %p')}</div></div>", unsafe_allow_html=True)
 
     g_pcs, f_pcs, staff_count = safe_int(f_c_df, 'Grocery'), safe_int(f_c_df, 'Frozen'), safe_int(f_c_df, 'Staff', 1)
     total_pcs = g_pcs + f_pcs
@@ -349,7 +348,8 @@ def live_tv_board():
     task_hours = task_mins / 60.0
 
     total_hours_needed = (freight_hours + task_hours) / staff_count if staff_count > 0 else 0
-    completion_time = (curr_now + timedelta(hours=total_hours_needed)).strftime('%H:%M') if (total_pcs > 0 or task_mins > 0) else "N/A"
+    # ETA format changed to 12-hour AM/PM to match the header clock
+    completion_time = (curr_now + timedelta(hours=total_hours_needed)).strftime('%I:%M %p') if (total_pcs > 0 or task_mins > 0) else "N/A"
 
     st.markdown(f"""
     <div class='kpi-container'>
