@@ -4,7 +4,11 @@ import psycopg2
 import html
 import uuid
 import hashlib
+import warnings
 from datetime import datetime, timezone, timedelta
+
+# Hide the Pandas SQLAlchemy warning to keep logs clean
+warnings.filterwarnings('ignore', category=UserWarning)
 
 # --- HARDENED: STRICT TIMEZONE HANDLING ---
 try:
@@ -29,7 +33,7 @@ def gen_id():
 # --- BOARD CONFIGURATION ---
 st.set_page_config(page_title="TGP Comm Board", layout="wide", initial_sidebar_state="collapsed")
 
-# URL QUERY PARAMETER CHECK (For permanently locking a TV into refresh mode)
+# URL QUERY PARAMETER CHECK
 query_params = st.query_params
 is_tv_url_mode = str(query_params.get("tvmode", "")).lower() in ["true", "1", "yes"] or str(query_params.get("mode", "")).lower() == "tv"
 
@@ -236,7 +240,6 @@ div[data-testid="stButton"] > button:hover {{ border-color: #38bdf8; color: #38b
 
 # --- LOAD STATE FOR SIDEBAR ---
 with get_db() as conn:
-    # Use pandas read_sql directly with psycopg2 connection
     c_df = pd.read_sql("SELECT * FROM counts WHERE ID = 1", conn)
     staff_df = pd.read_sql("SELECT * FROM staff", conn)
     set_df = pd.read_sql("SELECT * FROM settings", conn)
@@ -244,27 +247,28 @@ with get_db() as conn:
 now_local = get_local_now()
 day_name = now_local.strftime("%A")
 
-g_pcs = int(c_df["Grocery"].iloc[0]) if not c_df.empty else 0
-f_pcs = int(c_df["Frozen"].iloc[0]) if not c_df.empty else 0
-staff_count = max(1, int(c_df["Staff"].iloc[0])) if not c_df.empty else 1
+# Updated to lowercase dataframe lookups
+g_pcs = int(c_df["grocery"].iloc[0]) if not c_df.empty else 0
+f_pcs = int(c_df["frozen"].iloc[0]) if not c_df.empty else 0
+staff_count = max(1, int(c_df["staff"].iloc[0])) if not c_df.empty else 1
 
-master_staff = staff_df[staff_df["Name"] != "Unassigned"]["Name"].tolist() if not staff_df.empty else []
-active_staff = staff_df[(staff_df["Active"] == 1) & (staff_df["Name"] != "Unassigned")]["Name"].tolist() if not staff_df.empty else []
+master_staff = staff_df[staff_df["name"] != "Unassigned"]["name"].tolist() if not staff_df.empty else []
+active_staff = staff_df[(staff_df["active"] == 1) & (staff_df["name"] != "Unassigned")]["name"].tolist() if not staff_df.empty else []
 
 admin_pin_hash = ""
 global_tv_active = False
 cases_per_hour = 55.0
 
 if not set_df.empty:
-    pin_val = set_df.loc[set_df["Setting_Name"] == "Admin_PIN", "Setting_Value"]
+    pin_val = set_df.loc[set_df["setting_name"] == "Admin_PIN", "setting_value"]
     if not pin_val.empty:
         admin_pin_hash = pin_val.iloc[0]
     
-    tv_val = set_df.loc[set_df["Setting_Name"] == "Global_TV_Mode", "Setting_Value"]
+    tv_val = set_df.loc[set_df["setting_name"] == "Global_TV_Mode", "setting_value"]
     if not tv_val.empty:
         global_tv_active = (tv_val.iloc[0] == "1")
     
-    cph_val = set_df.loc[set_df["Setting_Name"] == "Cases_Per_Hour", "Setting_Value"]
+    cph_val = set_df.loc[set_df["setting_name"] == "Cases_Per_Hour", "setting_value"]
     if not cph_val.empty:
         cases_per_hour = float(cph_val.iloc[0])
 
@@ -432,13 +436,12 @@ def render_main_board(current_active_op):
 
     cph = 55.0
     if not st_df.empty:
-        v = st_df.loc[st_df["Setting_Name"] == "Cases_Per_Hour", "Setting_Value"]
+        v = st_df.loc[st_df["setting_name"] == "Cases_Per_Hour", "setting_value"]
         if not v.empty:
             cph = max(1.0, float(v.iloc[0]))
 
     curr_now = get_local_now()
     
-    # Check if this specific client is acting as a TV
     is_tv = is_tv_url_mode or st.session_state.get("tv_toggle", False)
     
     st.markdown(f"""
@@ -453,14 +456,15 @@ def render_main_board(current_active_op):
     elif global_tv_active:
         st.caption("📡 Global Remote TV Mode Active (2s Refresh)")
 
-    g, f, s = int(curr_c["Grocery"].iloc[0]), int(curr_c["Frozen"].iloc[0]), max(1, int(curr_c["Staff"].iloc[0]))
-    w = bool(curr_c["Weather_Alert"].iloc[0])
-    l_s = curr_s[(curr_s["Active"] == 1) & (curr_s["Name"] != "Unassigned")]["Name"].tolist()
+    # Lowercase updates
+    g, f, s = int(curr_c["grocery"].iloc[0]), int(curr_c["frozen"].iloc[0]), max(1, int(curr_c["staff"].iloc[0]))
+    w = bool(curr_c["weather_alert"].iloc[0])
+    l_s = curr_s[(curr_s["active"] == 1) & (curr_s["name"] != "Unassigned")]["name"].tolist()
 
     total_pcs = g + f
     f_hrs = (total_pcs / cph)
-    open_tasks = t_df[t_df["Status"] == "Open"].copy()
-    t_mins = pd.to_numeric(open_tasks["Est_Mins"], errors='coerce').fillna(15).sum()
+    open_tasks = t_df[t_df["status"] == "Open"].copy()
+    t_mins = pd.to_numeric(open_tasks["est_mins"], errors='coerce').fillna(15).sum()
     total_hrs = (f_hrs + (t_mins / 60.0)) / s
     eta = (curr_now + timedelta(hours=total_hrs)).strftime('%I:%M %p') if (total_pcs > 0 or t_mins > 0) else "N/A"
 
@@ -490,62 +494,61 @@ def render_main_board(current_active_op):
         if open_tasks.empty:
             st.success("All tasks complete!")
         for _, r in open_tasks.iterrows():
-            card_html = f"<div class='data-card {'data-urgent' if r['Priority'] == 'Urgent' else ''}'><strong>[{r['Zone']}]</strong> {html.escape(r['Task_Detail'])} ({r['Est_Mins']}m)<br><small>OWNER: {r['Assigned_To']}</small></div>"
+            card_html = f"<div class='data-card {'data-urgent' if r['priority'] == 'Urgent' else ''}'><strong>[{r['zone']}]</strong> {html.escape(r['task_detail'])} ({r['est_mins']}m)<br><small>OWNER: {r['assigned_to']}</small></div>"
             
-            # Hide interactive components on TV
             if is_tv:
                 st.markdown(card_html, unsafe_allow_html=True)
             else:
                 c1, c2, c3 = st.columns([0.55, 0.30, 0.15], gap="small")
                 c1.markdown(card_html, unsafe_allow_html=True)
                 opts = ["Unassigned"] + l_s
-                if r['Assigned_To'] not in opts:
-                    opts.append(r['Assigned_To'])
-                c2.selectbox("Ass", opts, index=opts.index(r['Assigned_To']), key=f"sel_{r['Task_ID']}", label_visibility="collapsed", on_change=handle_assign_callback, args=(r['Task_ID'], f"sel_{r['Task_ID']}"))
-                c3.button("DONE", key=f"dn_{r['Task_ID']}", on_click=complete_task, args=(r['Task_ID'], current_active_op))
+                if r['assigned_to'] not in opts:
+                    opts.append(r['assigned_to'])
+                c2.selectbox("Ass", opts, index=opts.index(r['assigned_to']), key=f"sel_{r['task_id']}", label_visibility="collapsed", on_change=handle_assign_callback, args=(r['task_id'], f"sel_{r['task_id']}"))
+                c3.button("DONE", key=f"dn_{r['task_id']}", on_click=complete_task, args=(r['task_id'], current_active_op))
 
     with R:
         st.markdown("<div class='sect-header'>Shelf Holes (OOS)</div>", unsafe_allow_html=True)
-        open_oos = oos_df[oos_df["Status"] == "Open"]
+        open_oos = oos_df[oos_df["status"] == "Open"]
         if open_oos.empty:
             st.caption("No holes reported.")
         for _, r in open_oos.iterrows():
-            oos_html = f"<div class='data-card data-urgent'><strong>{r['Zone']}</strong>: {r['Hole_Count']} Holes<br><small>{html.escape(r['Notes'])}</small></div>"
+            oos_html = f"<div class='data-card data-urgent'><strong>{r['zone']}</strong>: {r['hole_count']} Holes<br><small>{html.escape(r['notes'])}</small></div>"
             
             if is_tv:
                 st.markdown(oos_html, unsafe_allow_html=True)
             else:
                 c1, c2 = st.columns([0.75, 0.25], gap="small")
                 c1.markdown(oos_html, unsafe_allow_html=True)
-                c2.button("CLR", key=f"o_{r['OOS_ID']}", on_click=complete_oos, args=(r['OOS_ID'], current_active_op))
+                c2.button("CLR", key=f"o_{r['oos_id']}", on_click=complete_oos, args=(r['oos_id'], current_active_op))
 
         st.markdown("<div class='sect-header'>Orders & Freight</div>", unsafe_allow_html=True)
         c_ord, c_exp = st.columns(2, gap="small")
         with c_ord:
-            os_df = s_df[s_df["Status"] == "Open"]
+            os_df = s_df[s_df["status"] == "Open"]
             if os_df.empty:
                 st.caption("No pending requests.")
             for _, r in os_df.iterrows():
-                ord_html = f"<div class='data-card' style='border-left-color:#a855f7;'><strong>Loc {r['Location']}</strong>: {html.escape(r['Item'])}<br><small>{html.escape(r['Customer'])}</small></div>"
+                ord_html = f"<div class='data-card' style='border-left-color:#a855f7;'><strong>Loc {r['location']}</strong>: {html.escape(r['item'])}<br><small>{html.escape(r['customer'])}</small></div>"
                 
                 if is_tv:
                     c_ord.markdown(ord_html, unsafe_allow_html=True)
                 else:
                     c_ord.markdown(ord_html, unsafe_allow_html=True)
-                    c_ord.button("PU", key=f"s_{r['Order_ID']}", on_click=complete_special_order, args=(r['Order_ID'], current_active_op))
+                    c_ord.button("PU", key=f"s_{r['order_id']}", on_click=complete_special_order, args=(r['order_id'], current_active_op))
                     
         with c_exp:
-            ex_df = e_df[e_df["Status"] == "Pending"]
+            ex_df = e_df[e_df["status"] == "Pending"]
             if ex_df.empty:
                 st.caption("No expected freight.")
             for _, r in ex_df.iterrows():
-                exp_html = f"<div class='data-card' style='border-left-color:#f59e0b;'>🚚 <strong>{html.escape(r['Vendor'])}</strong></div>"
+                exp_html = f"<div class='data-card' style='border-left-color:#f59e0b;'>🚚 <strong>{html.escape(r['vendor'])}</strong></div>"
                 
                 if is_tv:
                     c_exp.markdown(exp_html, unsafe_allow_html=True)
                 else:
                     c_exp.markdown(exp_html, unsafe_allow_html=True)
-                    c_exp.button("RCV", key=f"e_{r['Exp_ID']}", on_click=complete_expected_order, args=(r['Exp_ID'], current_active_op))
+                    c_exp.button("RCV", key=f"e_{r['exp_id']}", on_click=complete_expected_order, args=(r['exp_id'], current_active_op))
 
         st.divider()
         if not is_tv:
@@ -575,9 +578,9 @@ def render_main_board(current_active_op):
                 st.rerun()
 
     if not tk_df.empty:
-        live_tk = tk_df.dropna(subset=["Message"])
+        live_tk = tk_df.dropna(subset=["message"])
         if not live_tk.empty:
-            m_str = " &nbsp;&nbsp;&nbsp;&nbsp; 🛑 &nbsp;&nbsp;&nbsp;&nbsp; ".join(live_tk["Message"].tolist())
+            m_str = " &nbsp;&nbsp;&nbsp;&nbsp; 🛑 &nbsp;&nbsp;&nbsp;&nbsp; ".join(live_tk["message"].tolist())
             st.markdown(f"<div class='ticker-wrap'><div class='ticker'>📢 {m_str} &nbsp;&nbsp;&nbsp;&nbsp; 🛑 &nbsp;&nbsp;&nbsp;&nbsp; </div></div>", unsafe_allow_html=True)
 
 # --- THE 2-SECOND ENGINE ---
