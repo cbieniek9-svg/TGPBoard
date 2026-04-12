@@ -5,6 +5,7 @@ import html
 import uuid
 import hashlib
 import warnings
+import time
 from datetime import datetime, timezone, timedelta
 
 # Hide the Pandas SQLAlchemy warning to keep logs clean
@@ -51,11 +52,17 @@ PREMIUM_STAFF = ["Chris", "Ashley", "Luke", "Chandler"]
 ORDER_LOCATIONS = ["1", "2", "3", "22"]
 aisles = ["Aisle 1", "Aisle 2", "Aisle 3", "Aisle 4", "Aisle 5", "Aisle 6", "Aisle 7", "Aisle 8", "Receiving", "Freezer", "Bakery", "Outside"]
 
-# --- POSTGRESQL HIGH-PERFORMANCE CONNECTION ---
-def get_db():
-    conn = psycopg2.connect(st.secrets["DB_URL"])
-    conn.autocommit = True 
-    return conn
+# --- POSTGRESQL CONNECTION (WITH RETRY & TIMEOUT) ---
+def get_db(retries=3):
+    for i in range(retries):
+        try:
+            conn = psycopg2.connect(st.secrets["DB_URL"], connect_timeout=5)
+            conn.autocommit = True 
+            return conn
+        except psycopg2.OperationalError as e:
+            if i == retries - 1:
+                raise e
+            time.sleep(0.5)
 
 # --- DATABASE INITIALIZATION ---
 def init_db():
@@ -120,6 +127,21 @@ def init_db():
 
 init_db()
 
+# --- LIGHTWEIGHT QUERY THROTTLE ---
+@st.cache_data(ttl=2)
+def load_board_data():
+    with get_db() as conn:
+        return {
+            "tasks": pd.read_sql("SELECT * FROM tasks", conn),
+            "oos": pd.read_sql("SELECT * FROM oos", conn),
+            "special_orders": pd.read_sql("SELECT * FROM special_orders", conn),
+            "expected_orders": pd.read_sql("SELECT * FROM expected_orders", conn),
+            "counts": pd.read_sql("SELECT * FROM counts WHERE ID = 1", conn),
+            "staff": pd.read_sql("SELECT * FROM staff", conn),
+            "ticker": pd.read_sql("SELECT * FROM ticker", conn),
+            "settings": pd.read_sql("SELECT * FROM settings", conn)
+        }
+
 # --- INTERNAL SERVICE LAYER (ATOMIC TRANSACTIONS) ---
 def _internal_audit(cur, event):
     cur.execute("INSERT INTO audit VALUES (%s, %s, %s)", (gen_id(), get_utc_now(), event))
@@ -140,6 +162,7 @@ def handle_assign_callback(task_id, widget_key):
     new_owner = st.session_state.get(widget_key, "Unassigned")
     try:
         assign_task(task_id, new_owner)
+        load_board_data.clear() # Instantly invalidate cache
     except Exception as e:
         st.error(f"Assignment failed: {e}")
 
@@ -155,6 +178,7 @@ def complete_task(task_id, premium_user):
         _strict_update(cur, "UPDATE tasks SET Status = 'Closed', Closed_By = %s, Time_Closed = %s WHERE Task_ID = %s", 
                      (premium_user, get_utc_now(), str(task_id)))
         _internal_audit(cur, f"Task {task_id} completed by {worker} (Verified by {premium_user})")
+        load_board_data.clear()
 
 def complete_oos(oos_id, user):
     with get_db() as conn:
@@ -162,6 +186,7 @@ def complete_oos(oos_id, user):
         _strict_update(cur, "UPDATE oos SET Status = 'Closed', Closed_By = %s, Time_Closed = %s WHERE OOS_ID = %s", 
                      (user, get_utc_now(), str(oos_id)))
         _internal_audit(cur, f"OOS {oos_id} cleared by {user}")
+        load_board_data.clear()
 
 def complete_special_order(order_id, user):
     with get_db() as conn:
@@ -169,6 +194,7 @@ def complete_special_order(order_id, user):
         _strict_update(cur, "UPDATE special_orders SET Status = 'Closed', Closed_By = %s, Time_Closed = %s WHERE Order_ID = %s", 
                      (user, get_utc_now(), str(order_id)))
         _internal_audit(cur, f"Special Order {order_id} cleared by {user}")
+        load_board_data.clear()
 
 def complete_expected_order(exp_id, user):
     with get_db() as conn:
@@ -176,12 +202,14 @@ def complete_expected_order(exp_id, user):
         _strict_update(cur, "UPDATE expected_orders SET Status = 'Closed', Closed_By = %s, Time_Closed = %s WHERE Exp_ID = %s", 
                      (user, get_utc_now(), str(exp_id)))
         _internal_audit(cur, f"Expected Inbound {exp_id} received by {user}")
+        load_board_data.clear()
 
 def delete_ticker(msg_id):
     with get_db() as conn:
         cur = conn.cursor()
         _strict_update(cur, "DELETE FROM ticker WHERE Msg_ID = %s", (str(msg_id),))
         _internal_audit(cur, "Broadcast message cleared")
+        load_board_data.clear()
 
 def execute_eod_reset():
     with get_db() as conn:
@@ -192,6 +220,7 @@ def execute_eod_reset():
         cur.execute("DELETE FROM oos")
         cur.execute("DELETE FROM ticker")
         _internal_audit(cur, "EOD RESET COMPLETED by Admin")
+        load_board_data.clear()
 
 # --- UI STYLING (ULTRA-DENSE FOR TV SCREEN) ---
 st.markdown(f"""
@@ -239,15 +268,15 @@ div[data-testid="stButton"] > button:hover {{ border-color: #38bdf8; color: #38b
 """, unsafe_allow_html=True)
 
 # --- LOAD STATE FOR SIDEBAR ---
-with get_db() as conn:
-    c_df = pd.read_sql("SELECT * FROM counts WHERE ID = 1", conn)
-    staff_df = pd.read_sql("SELECT * FROM staff", conn)
-    set_df = pd.read_sql("SELECT * FROM settings", conn)
+# Pull data safely from our throttled cache
+global_data = load_board_data()
+c_df = global_data["counts"]
+staff_df = global_data["staff"]
+set_df = global_data["settings"]
 
 now_local = get_local_now()
 day_name = now_local.strftime("%A")
 
-# Updated to lowercase dataframe lookups
 g_pcs = int(c_df["grocery"].iloc[0]) if not c_df.empty else 0
 f_pcs = int(c_df["frozen"].iloc[0]) if not c_df.empty else 0
 staff_count = max(1, int(c_df["staff"].iloc[0])) if not c_df.empty else 1
@@ -285,18 +314,21 @@ with st.sidebar:
             with get_db() as conn:
                 cur = conn.cursor()
                 cur.execute("UPDATE settings SET Setting_Value = '0' WHERE Setting_Name = 'Global_TV_Mode'")
+            load_board_data.clear()
             st.rerun()
     else:
         if st.button("🚀 FORCE ALL SCREENS TO TV MODE", type="secondary"):
             with get_db() as conn:
                 cur = conn.cursor()
                 cur.execute("UPDATE settings SET Setting_Value = '1' WHERE Setting_Name = 'Global_TV_Mode'")
+            load_board_data.clear()
             st.rerun()
 
     active_op = st.selectbox("Premium Operator:", PREMIUM_STAFF)
     
     if not should_auto_refresh:
         if st.button("🔄 Sync Board Now"):
+            load_board_data.clear()
             st.rerun()
 
     with st.expander("👥 Shift Roster Settings"):
@@ -308,12 +340,14 @@ with st.sidebar:
                 if selected_active:
                     placeholders = ','.join(['%s'] * len(selected_active))
                     cur.execute(f"UPDATE staff SET Active = 1 WHERE Name IN ({placeholders})", selected_active)
+            load_board_data.clear()
             st.rerun()
         new_staff = st.text_input("Add New Floor Staff")
         if st.button("Add to Roster") and new_staff and new_staff.strip() not in master_staff:
             with get_db() as conn:
                 cur = conn.cursor()
                 cur.execute("INSERT INTO staff (Name, Active) VALUES (%s, 1) ON CONFLICT (Name) DO NOTHING", (html.escape(new_staff.strip()),))
+            load_board_data.clear()
             st.rerun()
 
     st.divider()
@@ -324,6 +358,7 @@ with st.sidebar:
                 cur = conn.cursor()
                 cur.execute("INSERT INTO ticker VALUES (%s, %s)", (gen_id(), html.escape(new_msg.strip())))
                 _internal_audit(cur, f"Broadcast added: {new_msg.strip()}")
+            load_board_data.clear()
             st.rerun()
 
     with st.form("task_form", clear_on_submit=True):
@@ -337,6 +372,7 @@ with st.sidebar:
                 cur.execute("INSERT INTO tasks VALUES (%s, %s, 'Open', %s, %s, 'Unassigned', %s, %s, '', '') ON CONFLICT DO NOTHING", 
                              (gen_id(), html.escape(t_desc.strip().capitalize()), t_pri, t_zone, t_est, get_utc_now()))
                 _internal_audit(cur, f"Task Deployed: {t_desc.strip()}")
+            load_board_data.clear()
             st.rerun()
 
     with st.form("load_form"):
@@ -348,6 +384,7 @@ with st.sidebar:
                 cur = conn.cursor()
                 cur.execute("UPDATE counts SET Grocery=%s, Frozen=%s, Staff=%s, Last_Update=%s WHERE ID = 1", 
                              (in_g, in_f, in_s, get_utc_now()))
+            load_board_data.clear()
             st.rerun()
 
     with st.form("oos_form", clear_on_submit=True):
@@ -360,6 +397,7 @@ with st.sidebar:
                 cur.execute("INSERT INTO oos VALUES (%s, %s, %s, %s, 'Open', %s, %s, '', '')", 
                              (gen_id(), o_z, o_c, html.escape(o_n.strip()), active_op, get_utc_now()))
                 _internal_audit(cur, f"Logged {o_c} holes in {o_z}")
+            load_board_data.clear()
             st.rerun()
 
     with st.form("order_form", clear_on_submit=True):
@@ -372,6 +410,7 @@ with st.sidebar:
                 cur.execute("INSERT INTO special_orders VALUES (%s, %s, %s, '', %s, 'Open', %s, %s, '', '')", 
                              (gen_id(), html.escape(c_name.strip()), html.escape(c_item.strip()), c_loc, active_op, get_utc_now()))
                 _internal_audit(cur, f"Customer Order Logged for Location {c_loc}")
+            load_board_data.clear()
             st.rerun()
 
     with st.form("vendor_form", clear_on_submit=True):
@@ -382,6 +421,7 @@ with st.sidebar:
                 cur.execute("INSERT INTO expected_orders VALUES (%s, %s, %s, 'Pending', %s, '', '') ON CONFLICT DO NOTHING", 
                              (gen_id(), html.escape(e_ven.strip()), day_name, active_op))
                 _internal_audit(cur, f"Extra Inbound Logged: {e_ven.strip()}")
+            load_board_data.clear()
             st.rerun()
 
     if st.button("🌦️ Toggle Weather Alert"):
@@ -389,6 +429,7 @@ with st.sidebar:
             cur = conn.cursor()
             cur.execute("UPDATE counts SET Weather_Alert = CASE WHEN Weather_Alert = 1 THEN 0 ELSE 1 END WHERE ID = 1")
             _internal_audit(cur, "Weather alert toggled")
+        load_board_data.clear()
         st.rerun()
 
     with st.expander("🛡️ Admin Console"):
@@ -403,6 +444,7 @@ with st.sidebar:
                         cur.execute("UPDATE settings SET Setting_Value = %s WHERE Setting_Name = 'Cases_Per_Hour'", (str(new_cph),))
                         if new_pin.strip():
                             cur.execute("UPDATE settings SET Setting_Value = %s WHERE Setting_Name = 'Admin_PIN'", (get_pin_hash(new_pin.strip()),))
+                    load_board_data.clear()
                     st.rerun()
             with st.form("del_staff_form"):
                 if master_staff:
@@ -412,6 +454,7 @@ with st.sidebar:
                             with get_db() as conn:
                                 cur = conn.cursor()
                                 cur.execute("DELETE FROM staff WHERE Name = %s", (del_staff,))
+                            load_board_data.clear()
                             st.rerun()
                         except psycopg2.IntegrityError:
                             st.error(f"Cannot delete {del_staff}. Active tasks assigned.")
@@ -420,19 +463,21 @@ with st.sidebar:
             with st.form("eod_form"):
                 if st.form_submit_button("🌙 EXECUTE EOD RESET", type="primary"):
                     execute_eod_reset()
+                    load_board_data.clear()
                     st.rerun()
 
 # --- CORE RENDERING FUNCTION ---
 def render_main_board(current_active_op):
-    with get_db() as conn:
-        t_df = pd.read_sql("SELECT * FROM tasks", conn)
-        oos_df = pd.read_sql("SELECT * FROM oos", conn)
-        s_df = pd.read_sql("SELECT * FROM special_orders", conn)
-        e_df = pd.read_sql("SELECT * FROM expected_orders", conn)
-        curr_c = pd.read_sql("SELECT * FROM counts WHERE ID = 1", conn)
-        curr_s = pd.read_sql("SELECT * FROM staff", conn)
-        tk_df = pd.read_sql("SELECT * FROM ticker", conn)
-        st_df = pd.read_sql("SELECT * FROM settings", conn)
+    # Pull data safely from our throttled cache
+    data = load_board_data()
+    t_df = data["tasks"]
+    oos_df = data["oos"]
+    s_df = data["special_orders"]
+    e_df = data["expected_orders"]
+    curr_c = data["counts"]
+    curr_s = data["staff"]
+    tk_df = data["ticker"]
+    st_df = data["settings"]
 
     cph = 55.0
     if not st_df.empty:
@@ -452,11 +497,10 @@ def render_main_board(current_active_op):
     """, unsafe_allow_html=True)
     
     if is_tv_url_mode:
-        st.caption("✅ TV URL Sync Active (2s Refresh)")
+        st.caption("✅ TV URL Sync Active (4s Refresh)")
     elif global_tv_active:
-        st.caption("📡 Global Remote TV Mode Active (2s Refresh)")
+        st.caption("📡 Global Remote TV Mode Active (4s Refresh)")
 
-    # Lowercase updates
     g, f, s = int(curr_c["grocery"].iloc[0]), int(curr_c["frozen"].iloc[0]), max(1, int(curr_c["staff"].iloc[0]))
     w = bool(curr_c["weather_alert"].iloc[0])
     l_s = curr_s[(curr_s["active"] == 1) & (curr_s["name"] != "Unassigned")]["name"].tolist()
@@ -575,6 +619,7 @@ def render_main_board(current_active_op):
                     for v in VENDOR_SCHEDULE.get(curr_now.strftime('%A'), []):
                         cur.execute("INSERT INTO expected_orders VALUES (%s, %s, %s, 'Pending', 'AUTO', '', '') ON CONFLICT DO NOTHING", 
                                      (gen_id(), v, curr_now.strftime('%A')))
+                load_board_data.clear()
                 st.rerun()
 
     if not tk_df.empty:
@@ -583,9 +628,9 @@ def render_main_board(current_active_op):
             m_str = " &nbsp;&nbsp;&nbsp;&nbsp; 🛑 &nbsp;&nbsp;&nbsp;&nbsp; ".join(live_tk["message"].tolist())
             st.markdown(f"<div class='ticker-wrap'><div class='ticker'>📢 {m_str} &nbsp;&nbsp;&nbsp;&nbsp; 🛑 &nbsp;&nbsp;&nbsp;&nbsp; </div></div>", unsafe_allow_html=True)
 
-# --- THE 2-SECOND ENGINE ---
+# --- THE 4-SECOND ENGINE ---
 if should_auto_refresh:
-    @st.fragment(run_every=2)
+    @st.fragment(run_every=4)
     def auto_refresh_loop(current_active_op):
         render_main_board(current_active_op)
         
