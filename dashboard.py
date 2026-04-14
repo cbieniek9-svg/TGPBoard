@@ -117,8 +117,11 @@ def load_raw():
 
 @st.cache_data(ttl=60)
 def load_historical_data(days_back=7):
-    tasks = conn.query(f"SELECT * FROM tasks WHERE Status='Closed' AND Time_Closed >= NOW() - INTERVAL '{days_back} days'", ttl=0)
-    oos = conn.query(f"SELECT * FROM oos WHERE Status='Closed' AND Time_Closed >= NOW() - INTERVAL '{days_back} days'", ttl=0)
+    # Calculate cutoff securely in Python to avoid Postgres text-to-timestamp collision
+    cutoff_date = (datetime.now(timezone.utc) - timedelta(days=days_back)).isoformat()
+    
+    tasks = conn.query(f"SELECT * FROM tasks WHERE Status='Closed' AND Time_Closed >= '{cutoff_date}'", ttl=0)
+    oos = conn.query(f"SELECT * FROM oos WHERE Status='Closed' AND Time_Closed >= '{cutoff_date}'", ttl=0)
     
     if not tasks.empty:
         tasks['time_submitted'] = pd.to_datetime(tasks['time_submitted'], errors='coerce')
