@@ -85,7 +85,7 @@ VENDOR_SCHEDULE = {
     "Wednesday": ["Old Dutch", "Frito Lay (Retail)"],
     "Thursday": ["TGP", "Old Dutch", "Pepsi", "Frito Lay (Vending)", "Italian Bakery", "Canada Bread"],
     "Friday": ["Old Dutch", "Coke", "Frito Lay (Retail)"],
-    "Saturday": [],
+    "Saturday": ["Italian Bakery"],
     "Sunday": ["TGP"]
 }
 
@@ -307,14 +307,37 @@ def load_daily_rhythm(grocery_pcs, frozen_pcs, staff_num, cph):
         hrs_math = (((grocery_pcs + frozen_pcs) / cph) / staff_num) * 60 if (grocery_pcs + frozen_pcs) > 0 else 120
         curr_day = now_local().strftime('%A')
         
-        ds = [{"Task": "Direction Huddle", "Priority": "Urgent", "Zone": "General", "Time": 5}, 
-              {"Task": "Store Walk", "Priority": "High", "Zone": "General", "Time": 30}]
+        # --- EVERY DAY TASKS ---
+        ds = [
+            {"Task": "Direction Huddle", "Priority": "Urgent", "Zone": "General", "Time": 5}, 
+            {"Task": "Store Walk", "Priority": "High", "Zone": "General", "Time": 30},
+            {"Task": "Check freezer for fallen items", "Priority": "Routine", "Zone": "Freezer", "Time": 5},
+            {"Task": "Level off displays", "Priority": "Routine", "Zone": "General", "Time": 10}
+        ]
         
-        if curr_day in ["Sunday", "Tuesday", "Thursday"]: ds.append({"Task": "TGP Order", "Priority": "Urgent", "Zone": "Receiving", "Time": int(hrs_math)})
-        if curr_day == "Sunday": ds.append({"Task": "Build Displays (16hr budget)", "Priority": "High", "Zone": "General", "Time": 960})
-        if curr_day == "Wednesday": ds.append({"Task": "PRIMARY AD CHANGEOVER", "Priority": "Urgent", "Zone": "General", "Time": 240})
-        if curr_day == "Friday": ds.append({"Task": "Finalize Weekend Coverage", "Priority": "High", "Zone": "General", "Time": 60})
+        # --- TRUCK DAYS vs NON-TRUCK DAYS ---
+        if curr_day in ["Sunday", "Tuesday", "Thursday"]:
+            # Truck Days
+            ds.append({"Task": "TGP Order", "Priority": "Urgent", "Zone": "Receiving", "Time": int(hrs_math)})
+        else:
+            # Non-Truck Days (Monday, Wednesday, Friday, Saturday)
+            # Generate individual 45m back stock tasks for Aisles 1-8
+            for aisle_num in range(1, 9):
+                ds.append({
+                    "Task": f"Back stock Aisle {aisle_num}", 
+                    "Priority": "Routine", 
+                    "Zone": f"Aisle {aisle_num}", 
+                    "Time": 45
+                })
+            # Add Freezer back stock and Air Items
+            ds.append({"Task": "Back stock Freezer", "Priority": "Routine", "Zone": "Freezer", "Time": 45})
+            ds.append({"Task": "Check items out of the air", "Priority": "Routine", "Zone": "General", "Time": 30})
         
+        # --- SPECIFIC DAY TASKS ---
+        if curr_day == "Wednesday": 
+            ds.append({"Task": "PRIMARY AD CHANGEOVER", "Priority": "Urgent", "Zone": "General", "Time": 240})
+        
+        # --- DATABASE WRITES ---
         for d in ds:
             s.execute(text("""INSERT INTO tasks (Task_ID, Task_Detail, Status, Priority, Zone, Assigned_To, Est_Mins, Time_Submitted, Closed_By, Time_Closed) 
                               VALUES (:id, :desc, 'Open', :pri, :zone, 'Unassigned', :mins, :time, '', '') ON CONFLICT DO NOTHING"""),
