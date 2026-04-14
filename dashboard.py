@@ -146,10 +146,16 @@ staff_count = max(1, int(c_df["staff"].iloc[0])) if not c_df.empty else 1
 master_staff = staff_df[staff_df["name"] != "Unassigned"]["name"].tolist() if not staff_df.empty else PREMIUM_STAFF
 active_staff = staff_df[(staff_df["active"] == 1) & (staff_df["name"] != "Unassigned")]["name"].tolist() if not staff_df.empty else PREMIUM_STAFF
 
+# Extract settings
 cases_per_hour = 55.0
+start_time_str = "07:00"
+
 if not set_df.empty:
     cph_val = set_df.loc[set_df["setting_name"] == "Cases_Per_Hour", "setting_value"]
     if not cph_val.empty: cases_per_hour = float(cph_val.iloc[0])
+    
+    st_val = set_df.loc[set_df["setting_name"] == "Start_Time", "setting_value"]
+    if not st_val.empty: start_time_str = st_val.iloc[0]
 
 # -------------------------
 # SIDEBAR OPERATIONAL CONTROLS
@@ -214,13 +220,17 @@ with st.sidebar:
             st.rerun()
 
     with st.form("load_form"):
+        in_arr = st.time_input("Start / Arrival Time", value=datetime.strptime(start_time_str, "%H:%M").time())
         in_g = st.number_input("Grocery Pcs", min_value=0, value=g_pcs)
         in_f = st.number_input("Frozen Pcs", min_value=0, value=f_pcs)
         in_s = st.number_input("Active Staff", min_value=1, value=staff_count)
+        
         if st.form_submit_button("Calculate Labor"):
             with conn.session as s:
                 s.execute(text("UPDATE counts SET Grocery=:g, Frozen=:f, Staff=:staff, Last_Update=:time WHERE ID = 1"),
                           {"g": in_g, "f": in_f, "staff": in_s, "time": now_utc_iso()})
+                s.execute(text("INSERT INTO settings (Setting_Name, Setting_Value) VALUES ('Start_Time', :st) ON CONFLICT (Setting_Name) DO UPDATE SET Setting_Value = :st"),
+                          {"st": in_arr.strftime("%H:%M")})
                 s.commit()
             clear_cache()
             st.rerun()
@@ -419,7 +429,13 @@ def render_main_board(data_snapshot, user, is_tv):
     f_hrs = (total_pcs / cases_per_hour)
     t_mins = pd.to_numeric(t_df["est_mins"], errors='coerce').fillna(15).sum()
     total_hrs = (f_hrs + (t_mins / 60.0)) / staff_count
-    eta = (curr_now + timedelta(hours=total_hrs)).strftime('%I:%M %p') if (total_pcs > 0 or t_mins > 0) else "N/A"
+    
+    # NEW ETA LOGIC: Anchored to Start Time
+    arr_time_obj = datetime.strptime(start_time_str, "%H:%M").time()
+    # Combine today's date with the arrival time
+    anchor_time = curr_now.replace(hour=arr_time_obj.hour, minute=arr_time_obj.minute, second=0, microsecond=0)
+    
+    eta = (anchor_time + timedelta(hours=total_hrs)).strftime('%I:%M %p') if (total_pcs > 0 or t_mins > 0) else "N/A"
 
     st.markdown(f"""
     <div class='kpi-container'>
@@ -428,7 +444,7 @@ def render_main_board(data_snapshot, user, is_tv):
         <div class='kpi-box'><div class='kpi-label'>Staff</div><div class='kpi-value'>{staff_count}</div></div>
         <div class='kpi-box'><div class='kpi-label'>Tasks</div><div class='kpi-value'>{int(t_mins)}m</div></div>
         <div class='kpi-box {'urgent' if total_hrs > 7.5 else ''}'><div class='kpi-label'>Needed</div><div class='kpi-value'>{round(total_hrs,1)}h</div></div>
-        <div class='kpi-box'><div class='kpi-label'>True ETA</div><div class='kpi-value' style='color:#00e676;'>{eta}</div></div>
+        <div class='kpi-box'><div class='kpi-label'>Target Finish</div><div class='kpi-value' style='color:#00e676;'>{eta}</div></div>
     </div>
     """, unsafe_allow_html=True)
 
