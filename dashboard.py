@@ -3,6 +3,7 @@ import pandas as pd
 import uuid
 import hashlib
 import html
+import io
 from datetime import datetime, timedelta, timezone
 from sqlalchemy import text
 
@@ -114,6 +115,18 @@ def load_raw():
         "ticker": conn.query("SELECT * FROM ticker", ttl=0)
     }
 
+@st.cache_data(ttl=60)
+def load_historical_data(days_back=7):
+    tasks = conn.query(f"SELECT * FROM tasks WHERE Status='Closed' AND Time_Closed >= NOW() - INTERVAL '{days_back} days'", ttl=0)
+    oos = conn.query(f"SELECT * FROM oos WHERE Status='Closed' AND Time_Closed >= NOW() - INTERVAL '{days_back} days'", ttl=0)
+    
+    if not tasks.empty:
+        tasks['time_submitted'] = pd.to_datetime(tasks['time_submitted'], errors='coerce')
+        tasks['time_closed'] = pd.to_datetime(tasks['time_closed'], errors='coerce')
+        tasks['actual_mins'] = (tasks['time_closed'] - tasks['time_submitted']).dt.total_seconds() / 60.0
+        
+    return {"tasks": tasks, "oos": oos}
+
 def clear_cache():
     load_raw.clear()
 
@@ -130,27 +143,31 @@ staff_count = max(1, int(c_df["staff"].iloc[0])) if not c_df.empty else 1
 master_staff = staff_df[staff_df["name"] != "Unassigned"]["name"].tolist() if not staff_df.empty else PREMIUM_STAFF
 active_staff = staff_df[(staff_df["active"] == 1) & (staff_df["name"] != "Unassigned")]["name"].tolist() if not staff_df.empty else PREMIUM_STAFF
 
-admin_pin_hash = ""
 cases_per_hour = 55.0
 if not set_df.empty:
-    pin_val = set_df.loc[set_df["setting_name"] == "Admin_PIN", "setting_value"]
-    if not pin_val.empty: admin_pin_hash = pin_val.iloc[0]
-    
     cph_val = set_df.loc[set_df["setting_name"] == "Cases_Per_Hour", "setting_value"]
     if not cph_val.empty: cases_per_hour = float(cph_val.iloc[0])
 
 # -------------------------
-# SIDEBAR OPERATIONAL CONTROLS (V1 INPUT FORMS)
+# SIDEBAR OPERATIONAL CONTROLS
 # -------------------------
 with st.sidebar:
     st.markdown("### 🔧 COMM CENTER")
+    
+    # Analytics Toggle
+    show_analytics = st.session_state.get("show_analytics", False)
+    if st.button("⬅️ Back to Comm Board" if show_analytics else "📈 Launch Analytics", type="primary"):
+        st.session_state["show_analytics"] = not show_analytics
+        st.rerun()
+
+    st.divider()
     
     tv_toggle = st.toggle("📺 Local TV Display Mode", key="tv_toggle")
     should_auto_refresh = is_tv_url_mode or tv_toggle
     
     active_op = st.selectbox("Premium Operator:", PREMIUM_STAFF)
     
-    if not should_auto_refresh:
+    if not should_auto_refresh and not show_analytics:
         if st.button("🔄 Sync Board Now"):
             clear_cache()
             st.rerun()
@@ -161,10 +178,7 @@ with st.sidebar:
             with conn.session as s:
                 s.execute(text("UPDATE staff SET Active = 0 WHERE Name != 'Unassigned'"))
                 if selected_active:
-                    s.execute(
-                        text("UPDATE staff SET Active = 1 WHERE Name = ANY(:names)"), 
-                        {"names": selected_active}
-                    )
+                    s.execute(text("UPDATE staff SET Active = 1 WHERE Name = ANY(:names)"), {"names": selected_active})
                 s.commit()
             clear_cache()
             st.rerun()
@@ -175,10 +189,7 @@ with st.sidebar:
         new_msg = st.text_input("Add Ticker Message")
         if st.form_submit_button("Broadcast") and new_msg.strip():
             with conn.session as s:
-                s.execute(
-                    text("INSERT INTO ticker VALUES (:id, :msg)"), 
-                    {"id": gen_id(), "msg": html.escape(new_msg.strip())}
-                )
+                s.execute(text("INSERT INTO ticker VALUES (:id, :msg)"), {"id": gen_id(), "msg": html.escape(new_msg.strip())})
                 s.commit()
             clear_cache()
             st.rerun()
@@ -205,10 +216,8 @@ with st.sidebar:
         in_s = st.number_input("Active Staff", min_value=1, value=staff_count)
         if st.form_submit_button("Calculate Labor"):
             with conn.session as s:
-                s.execute(
-                    text("UPDATE counts SET Grocery=:g, Frozen=:f, Staff=:staff, Last_Update=:time WHERE ID = 1"),
-                    {"g": in_g, "f": in_f, "staff": in_s, "time": now_utc_iso()}
-                )
+                s.execute(text("UPDATE counts SET Grocery=:g, Frozen=:f, Staff=:staff, Last_Update=:time WHERE ID = 1"),
+                          {"g": in_g, "f": in_f, "staff": in_s, "time": now_utc_iso()})
                 s.commit()
             clear_cache()
             st.rerun()
@@ -257,7 +266,7 @@ with st.sidebar:
             st.rerun()
 
 # -------------------------
-# DATABASE WRITE ACTIONS (V2 SAFE LAYER)
+# DATABASE WRITE ACTIONS 
 # -------------------------
 def assign_task(task_id, widget_key):
     staff = st.session_state[widget_key]
@@ -268,37 +277,29 @@ def assign_task(task_id, widget_key):
 
 def complete_task(task_id, user):
     with conn.session as s:
-        s.execute(
-            text("UPDATE tasks SET Status='Closed', Closed_By=:user, Time_Closed=:time WHERE Task_ID=:id"),
-            {"user": user, "time": now_utc_iso(), "id": str(task_id)}
-        )
+        s.execute(text("UPDATE tasks SET Status='Closed', Closed_By=:user, Time_Closed=:time WHERE Task_ID=:id"),
+                  {"user": user, "time": now_utc_iso(), "id": str(task_id)})
         s.commit()
     clear_cache()
 
 def complete_oos(oos_id, user):
     with conn.session as s:
-        s.execute(
-            text("UPDATE oos SET Status='Closed', Closed_By=:user, Time_Closed=:time WHERE OOS_ID=:id"),
-            {"user": user, "time": now_utc_iso(), "id": str(oos_id)}
-        )
+        s.execute(text("UPDATE oos SET Status='Closed', Closed_By=:user, Time_Closed=:time WHERE OOS_ID=:id"),
+                  {"user": user, "time": now_utc_iso(), "id": str(oos_id)})
         s.commit()
     clear_cache()
 
 def complete_special_order(order_id, user):
     with conn.session as s:
-        s.execute(
-            text("UPDATE special_orders SET Status='Closed', Closed_By=:user, Time_Closed=:time WHERE Order_ID=:id"),
-            {"user": user, "time": now_utc_iso(), "id": str(order_id)}
-        )
+        s.execute(text("UPDATE special_orders SET Status='Closed', Closed_By=:user, Time_Closed=:time WHERE Order_ID=:id"),
+                  {"user": user, "time": now_utc_iso(), "id": str(order_id)})
         s.commit()
     clear_cache()
 
 def complete_expected_order(exp_id, user):
     with conn.session as s:
-        s.execute(
-            text("UPDATE expected_orders SET Status='Closed', Closed_By=:user, Time_Closed=:time WHERE Exp_ID=:id"),
-            {"user": user, "time": now_utc_iso(), "id": str(exp_id)}
-        )
+        s.execute(text("UPDATE expected_orders SET Status='Closed', Closed_By=:user, Time_Closed=:time WHERE Exp_ID=:id"),
+                  {"user": user, "time": now_utc_iso(), "id": str(exp_id)})
         s.commit()
     clear_cache()
 
@@ -315,34 +316,24 @@ def load_daily_rhythm(grocery_pcs, frozen_pcs, staff_num, cph):
             {"Task": "Level off displays", "Priority": "Routine", "Zone": "General", "Time": 10}
         ]
         
-        # --- TRUCK DAYS vs NON-TRUCK DAYS ---
+        # --- TRUCK VS NON-TRUCK ---
         if curr_day in ["Sunday", "Tuesday", "Thursday"]:
-            # Truck Days
             ds.append({"Task": "TGP Order", "Priority": "Urgent", "Zone": "Receiving", "Time": int(hrs_math)})
         else:
-            # Non-Truck Days (Monday, Wednesday, Friday, Saturday)
-            # Generate individual 45m back stock tasks for Aisles 1-8
             for aisle_num in range(1, 9):
-                ds.append({
-                    "Task": f"Back stock Aisle {aisle_num}", 
-                    "Priority": "Routine", 
-                    "Zone": f"Aisle {aisle_num}", 
-                    "Time": 45
-                })
-            # Add Freezer back stock and Air Items
+                ds.append({"Task": f"Back stock Aisle {aisle_num}", "Priority": "Routine", "Zone": f"Aisle {aisle_num}", "Time": 45})
             ds.append({"Task": "Back stock Freezer", "Priority": "Routine", "Zone": "Freezer", "Time": 45})
             ds.append({"Task": "Check items out of the air", "Priority": "Routine", "Zone": "General", "Time": 30})
         
-        # --- SPECIFIC DAY TASKS ---
+        # --- WEDNESDAY AD ---
         if curr_day == "Wednesday": 
             ds.append({"Task": "PRIMARY AD CHANGEOVER", "Priority": "Urgent", "Zone": "General", "Time": 240})
         
-        # --- DATABASE WRITES ---
+        # Execute DB Inserts
         for d in ds:
             s.execute(text("""INSERT INTO tasks (Task_ID, Task_Detail, Status, Priority, Zone, Assigned_To, Est_Mins, Time_Submitted, Closed_By, Time_Closed) 
                               VALUES (:id, :desc, 'Open', :pri, :zone, 'Unassigned', :mins, :time, '', '') ON CONFLICT DO NOTHING"""),
                       {"id": gen_id(), "desc": d["Task"], "pri": d["Priority"], "zone": d["Zone"], "mins": d["Time"], "time": now_utc_iso()})
-        
         for v in VENDOR_SCHEDULE.get(curr_day, []):
             s.execute(text("""INSERT INTO expected_orders (Exp_ID, Vendor, Expected_Day, Status, Logged_By, Closed_By, Time_Closed) 
                               VALUES (:id, :ven, :day, 'Pending', 'AUTO', '', '') ON CONFLICT DO NOTHING"""),
@@ -351,7 +342,58 @@ def load_daily_rhythm(grocery_pcs, frozen_pcs, staff_num, cph):
     clear_cache()
 
 # -------------------------
-# RENDER LAYER (V1 TV HTML LAYOUT)
+# ANALYTICS RENDER LAYER
+# -------------------------
+def render_analytics(days_back=7):
+    st.markdown("## 📊 TGP PERFORMANCE ANALYTICS")
+    st.caption(f"Analyzing closed data over the last {days_back} days")
+    
+    history = load_historical_data(days_back)
+    t_df = history["tasks"]
+    o_df = history["oos"]
+    
+    if t_df.empty or o_df.empty:
+        st.warning("Not enough historical data collected yet. Run the board for a few days to populate charts.")
+        return
+
+    st.divider()
+
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Tasks Completed", len(t_df))
+    c2.metric("Avg Time to Close (Mins)", round(t_df['actual_mins'].mean(), 1))
+    c3.metric("Total Shelf Holes Logged", o_df['hole_count'].sum())
+
+    # Excel Export
+    buffer = io.BytesIO()
+    with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
+        t_df_clean = t_df.drop(columns=['time_submitted', 'time_closed'], errors='ignore') 
+        t_df_clean.to_excel(writer, sheet_name='Closed_Tasks', index=False)
+        o_df.to_excel(writer, sheet_name='Closed_OOS', index=False)
+    
+    st.download_button(
+        label="📥 Export Data to Excel",
+        data=buffer.getvalue(),
+        file_name=f"TGP_Analytics_{days_back}Days.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        use_container_width=True
+    )
+
+    st.divider()
+
+    st.subheader("Staff Throughput")
+    staff_counts = t_df.groupby("closed_by").size().reset_index(name='tasks_closed').sort_values(by='tasks_closed', ascending=False)
+    st.bar_chart(staff_counts, x="closed_by", y="tasks_closed", color="#38bdf8")
+
+    st.subheader("OOS Hotspots (Shelf Holes by Zone)")
+    zone_holes = o_df.groupby("zone")["hole_count"].sum().reset_index().sort_values(by='hole_count', ascending=False)
+    st.bar_chart(zone_holes, x="zone", y="hole_count", color="#ef4444")
+    
+    st.subheader("Task Time: Estimated vs. Actual")
+    clean_t = t_df[t_df['actual_mins'] < 480] 
+    st.scatter_chart(clean_t[['est_mins', 'actual_mins', 'task_detail']], x="est_mins", y="actual_mins", color="#a855f7")
+
+# -------------------------
+# BOARD RENDER LAYER 
 # -------------------------
 def render_main_board(data_snapshot, user, is_tv):
     t_df = data_snapshot["tasks"]
@@ -446,16 +488,17 @@ def render_main_board(data_snapshot, user, is_tv):
             st.markdown(f"<div class='ticker-wrap'><div class='ticker'>📢 {m_str} &nbsp;&nbsp;&nbsp;&nbsp; 🛑 &nbsp;&nbsp;&nbsp;&nbsp; </div></div>", unsafe_allow_html=True)
 
 # -------------------------
-# ENTRYPOINT & FRAGMENT LOOP
+# ENTRYPOINT & LOGIC
 # -------------------------
-if should_auto_refresh:
-    @st.fragment(run_every=4)
-    def tv_loop():
-        # Inside the fragment, pull fresh data and render
-        fresh_data = load_raw()
-        render_main_board(fresh_data, active_op, is_tv=True)
-    tv_loop()
+if st.session_state.get("show_analytics", False):
+    render_analytics(days_back=7)
 else:
-    # Outside the fragment, interactive rendering
-    fresh_data = load_raw()
-    render_main_board(fresh_data, active_op, is_tv=False)
+    if should_auto_refresh:
+        @st.fragment(run_every=4)
+        def tv_loop():
+            fresh_data = load_raw()
+            render_main_board(fresh_data, active_op, is_tv=True)
+        tv_loop()
+    else:
+        fresh_data = load_raw()
+        render_main_board(fresh_data, active_op, is_tv=False)
