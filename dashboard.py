@@ -155,8 +155,9 @@ def load_fast_data():
     orders = to_df(supabase.table("special_orders").select("*").eq("status", "Open").execute().data)
     expected = to_df(supabase.table("expected_orders").select("*").eq("status", "Pending").execute().data)
 
-    t_res = supabase.table("tasks").select("task_id, task_detail, time_closed, closed_by").eq("status", "Closed").order("time_closed", desc=True).limit(6).execute()
-    o_res = supabase.table("oos").select("oos_id, zone, time_closed, closed_by").eq("status", "Closed").order("time_closed", desc=True).limit(6).execute()
+    # Filter out "AUTO" closures so the terminal gives a clean slate in the morning
+    t_res = supabase.table("tasks").select("task_id, task_detail, time_closed, closed_by").eq("status", "Closed").neq("closed_by", "AUTO").order("time_closed", desc=True).limit(6).execute()
+    o_res = supabase.table("oos").select("oos_id, zone, time_closed, closed_by").eq("status", "Closed").neq("closed_by", "AUTO").order("time_closed", desc=True).limit(6).execute()
     
     audits = []
     for t in t_res.data:
@@ -379,9 +380,24 @@ with st.sidebar:
         if c2.button("📦 Bale", use_container_width=True): execute_omni_command("High Priority Make Cardboard Bale", active_op, True)
         if c3.button("🧹 Sweep", use_container_width=True): execute_omni_command("High Priority Store Safety Sweep", active_op, True)
 
+        with st.expander("➕ Manual Task Override"):
+            with st.form("manual_task", clear_on_submit=True):
+                m_task = st.text_input("Task Description")
+                m_pri = st.selectbox("Priority", ["Routine", "High", "Urgent"])
+                m_zone = st.selectbox("Zone", ["General"] + aisles)
+                m_time = st.number_input("Est. Mins", min_value=1, value=15)
+                if st.form_submit_button("Deploy Task") and m_task:
+                    supabase.table("tasks").insert({
+                        "task_id": gen_id(), "task_detail": html.escape(m_task.strip().upper()), 
+                        "status": "Open", "priority": m_pri, "zone": m_zone, 
+                        "assigned_to": "Unassigned", "est_mins": m_time, 
+                        "time_submitted": utc_now_iso(), "closed_by": "", "time_closed": ""
+                    }).execute()
+                    clear_fast_cache()
+
         st.divider()
 
-        with st.expander("📝 Shift Notes & Alerts"):
+        with st.expander("📝 Shift Notes & Ticker"):
             new_note = st.text_area("Pass the baton:", value=shift_notes, height=100)
             is_crit = st.checkbox("Mark as Critical Alert", value=is_critical_alert)
             if st.button("Save Handover Notes"):
@@ -389,6 +405,14 @@ with st.sidebar:
                 update_setting("Critical_Alert", "1" if is_crit else "0")
                 st.toast("Notes Updated", icon="✅")
                 st.rerun()
+            
+            st.markdown("<hr style='margin: 10px 0; border-color: #1f3b5c;'>", unsafe_allow_html=True)
+            with st.form("ticker_form", clear_on_submit=True):
+                t_msg = st.text_input("Broadcast Live Ticker Message")
+                if st.form_submit_button("Send to Ticker") and t_msg:
+                    supabase.table("ticker").insert({"message": html.escape(t_msg.strip().upper())}).execute()
+                    clear_full_cache()
+                    st.rerun()
 
         with st.expander("👥 Shift Roster Settings"):
             selected_active = st.multiselect("Active Today:", master_staff, default=active_staff)
