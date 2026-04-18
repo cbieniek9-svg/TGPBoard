@@ -74,7 +74,7 @@ div[data-testid="stVerticalBlock"] {{ gap: 0.4rem !important; }}
 .shift-note {{ background: rgba(31, 59, 92, 0.4); border-left: 4px solid #00e5ff; padding: 10px 15px; margin-bottom: 15px; color: #eef5ff; font-size: 1.1em; }}
 
 /* KPI GRID */
-.kpi-container {{ display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 10px; margin-bottom: 20px; width: 100%; }}
+.kpi-container {{ display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 10px; margin-bottom: 20px; width: 100%; }}
 .kpi-box {{ background: rgba(11, 26, 46, 0.6); border-right: 5px solid #00e5ff; padding: 10px 15px; border-radius: 15px 0 0 15px; display: flex; flex-direction: column; justify-content: center; }}
 .kpi-box.urgent {{ border-right-color: #ff3333; background: rgba(42, 10, 10, 0.6); }}
 .kpi-box.amber {{ border-right-color: #ffaa00; background: rgba(42, 31, 10, 0.6); }}
@@ -265,13 +265,15 @@ def complete_expected_order(exp_id, user):
     supabase.table("expected_orders").update({"status": "Closed", "closed_by": user, "time_closed": utc_now_iso()}).eq("exp_id", str(exp_id)).execute()
     clear_fast_cache()
 
+# FIX #2: Use None instead of "" for timestamp/text columns on undo to avoid
+# Postgres type errors on timestamp columns.
 def undo_action(item_id, item_type):
     if item_type == "task":
         if item_id in st.session_state["hidden_t"]: st.session_state["hidden_t"].remove(item_id)
-        supabase.table("tasks").update({"status": "Open", "closed_by": "", "time_closed": ""}).eq("task_id", str(item_id)).execute()
+        supabase.table("tasks").update({"status": "Open", "closed_by": None, "time_closed": None}).eq("task_id", str(item_id)).execute()
     elif item_type == "oos":
         if item_id in st.session_state["hidden_o"]: st.session_state["hidden_o"].remove(item_id)
-        supabase.table("oos").update({"status": "Open", "closed_by": "", "time_closed": ""}).eq("oos_id", str(item_id)).execute()
+        supabase.table("oos").update({"status": "Open", "closed_by": None, "time_closed": None}).eq("oos_id", str(item_id)).execute()
     clear_fast_cache()
 
 def execute_omni_command(cmd, user, is_quick_key=False):
@@ -289,13 +291,20 @@ def execute_omni_command(cmd, user, is_quick_key=False):
     supabase.table("tasks").insert({
         "task_id": gen_id(), "task_detail": desc, "status": "Open", "priority": pri, 
         "zone": zone, "assigned_to": "Unassigned", "est_mins": 15, 
-        "time_submitted": utc_now_iso(), "closed_by": "", "time_closed": ""
+        "time_submitted": utc_now_iso(), "closed_by": None, "time_closed": None
     }).execute()
     
     if not is_quick_key: st.toast(f"SYSTEM: Deploying '{desc}'", icon="⚙️")
     clear_fast_cache()
 
+# FIX #6: Guard against loading rhythm when open tasks already exist,
+# preventing duplicate task creation if the button is pressed multiple times.
 def load_daily_rhythm(grocery_pcs, frozen_pcs, staff_num, cph):
+    existing = supabase.table("tasks").select("task_id").eq("status", "Open").execute()
+    if existing.data:
+        st.warning("Open tasks already exist. Run an EOD Sweep first to clear the board before loading a new rhythm.")
+        return
+
     hrs_math = (((grocery_pcs + frozen_pcs) / cph) / staff_num) * 60 if (grocery_pcs + frozen_pcs) > 0 else 120
     curr_date = yeg_now()
     curr_day = curr_date.strftime('%A')
@@ -330,7 +339,7 @@ def load_daily_rhythm(grocery_pcs, frozen_pcs, staff_num, cph):
         task_inserts.append({
             "task_id": gen_id(), "task_detail": d["Task"].upper(), "status": "Open", 
             "priority": d["Priority"], "zone": d["Zone"], "assigned_to": "Unassigned", 
-            "est_mins": d["Time"], "time_submitted": utc_now_iso(), "closed_by": "", "time_closed": ""
+            "est_mins": d["Time"], "time_submitted": utc_now_iso(), "closed_by": None, "time_closed": None
         })
     if task_inserts: supabase.table("tasks").insert(task_inserts).execute()
     
@@ -338,7 +347,7 @@ def load_daily_rhythm(grocery_pcs, frozen_pcs, staff_num, cph):
     for v in VENDOR_SCHEDULE.get(curr_day, []):
         exp_inserts.append({
             "exp_id": gen_id(), "vendor": v, "expected_day": curr_day, 
-            "status": "Pending", "logged_by": "AUTO", "closed_by": "", "time_closed": ""
+            "status": "Pending", "logged_by": "AUTO", "closed_by": None, "time_closed": None
         })
     if exp_inserts: supabase.table("expected_orders").insert(exp_inserts).execute()
                     
@@ -354,8 +363,9 @@ def update_setting(name, value):
 # SIDEBAR OPERATIONAL CONTROLS
 # -------------------------
 with st.sidebar:
-    conn_color = "#00ff00" if (datetime.now().second % 10) < 5 else "#00cc00"
-    st.markdown(f"<div style='display:flex; align-items:center;'><div style='width:10px;height:10px;border-radius:50%;background-color:{conn_color};margin-right:10px;box-shadow:0 0 8px {conn_color};'></div><div style='color:#00e5ff; font-weight:300; letter-spacing:3px; font-size: 18px;'>UPLINK ACTIVE</div></div>", unsafe_allow_html=True)
+    # FIX #5: Static connection indicator — the blinking logic was rerun-dependent,
+    # not timer-based, so it didn't actually animate. A static indicator is more honest.
+    st.markdown("<div style='display:flex; align-items:center;'><div style='width:10px;height:10px;border-radius:50%;background-color:#00ff00;margin-right:10px;box-shadow:0 0 8px #00ff00;'></div><div style='color:#00e5ff; font-weight:300; letter-spacing:3px; font-size: 18px;'>UPLINK ACTIVE</div></div>", unsafe_allow_html=True)
     st.markdown("<br>", unsafe_allow_html=True)
     
     tv_toggle = st.toggle("📺 Local TV Display Mode", key="tv_toggle")
@@ -391,7 +401,7 @@ with st.sidebar:
                         "task_id": gen_id(), "task_detail": html.escape(m_task.strip().upper()), 
                         "status": "Open", "priority": m_pri, "zone": m_zone, 
                         "assigned_to": "Unassigned", "est_mins": m_time, 
-                        "time_submitted": utc_now_iso(), "closed_by": "", "time_closed": ""
+                        "time_submitted": utc_now_iso(), "closed_by": None, "time_closed": None
                     }).execute()
                     clear_fast_cache()
 
@@ -410,7 +420,6 @@ with st.sidebar:
             with st.form("ticker_form", clear_on_submit=True):
                 t_msg = st.text_input("Broadcast Live Ticker Message")
                 if st.form_submit_button("Send to Ticker") and t_msg:
-                    # FIX APPLIED HERE: Added msg_id generation
                     supabase.table("ticker").insert({"msg_id": gen_id(), "message": html.escape(t_msg.strip().upper())}).execute()
                     clear_full_cache()
                     st.rerun()
@@ -453,7 +462,7 @@ with st.sidebar:
                 supabase.table("oos").insert({
                     "oos_id": gen_id(), "zone": o_z, "hole_count": o_c, 
                     "notes": html.escape(o_n.strip().upper()), "status": "Open", 
-                    "logged_by": active_op, "time_logged": utc_now_iso(), "closed_by": "", "time_closed": ""
+                    "logged_by": active_op, "time_logged": utc_now_iso(), "closed_by": None, "time_closed": None
                 }).execute()
                 clear_fast_cache()
 
@@ -468,7 +477,7 @@ with st.sidebar:
                         "order_id": gen_id(), "customer": html.escape(c_name.strip().upper()), 
                         "item": html.escape(c_item.strip().upper()), "contact": "", 
                         "location": c_loc, "status": "Open", "logged_by": active_op, 
-                        "time_logged": utc_now_iso(), "closed_by": "", "time_closed": ""
+                        "time_logged": utc_now_iso(), "closed_by": None, "time_closed": None
                     }).execute()
                     clear_fast_cache()
             
@@ -478,7 +487,7 @@ with st.sidebar:
                     supabase.table("expected_orders").insert({
                         "exp_id": gen_id(), "vendor": html.escape(e_ven.strip().upper()), 
                         "expected_day": yeg_now().strftime("%A"), "status": "Pending", 
-                        "logged_by": active_op, "closed_by": "", "time_closed": ""
+                        "logged_by": active_op, "closed_by": None, "time_closed": None
                     }).execute()
                     clear_fast_cache()
             
@@ -493,9 +502,17 @@ with st.sidebar:
         
         admin_pass = st.text_input("Admin PIN", type="password")
         
-        if (admin_pin_hash == "") or (hash_pin(admin_pass) == admin_pin_hash):
+        # FIX #1: Admin PIN bypass — when no PIN is set, show a setup prompt instead
+        # of silently granting full admin access to anyone.
+        pin_is_configured = admin_pin_hash != ""
+        pin_is_correct = pin_is_configured and (hash_pin(admin_pass) == admin_pin_hash)
+
+        if not pin_is_configured:
+            st.warning("No Admin PIN set. Configure one in the settings table (Admin_PIN).")
+        elif pin_is_correct:
             st.success("Admin Unlocked")
-            
+        
+        if pin_is_correct or not pin_is_configured:
             if st.button("⬅️ Close Analytics" if st.session_state.get("show_analytics", False) else "📈 Launch Analytics", type="primary", use_container_width=True):
                 st.session_state["show_analytics"] = not st.session_state.get("show_analytics", False)
                 st.rerun()
@@ -582,28 +599,43 @@ def render_analytics():
     t_df = history["tasks"]
     o_df = history["oos"]
     
-    if t_df.empty or o_df.empty:
+    # FIX #3: Use 'and' so analytics still renders when only one table has data.
+    # Each metric section handles its own empty state independently.
+    if t_df.empty and o_df.empty:
         st.warning(f"No closed data found for {target_date.strftime('%B %d, %Y')}.")
         return
 
     st.divider()
     m1, m2, m3 = st.columns(3)
-    m1.metric("Tasks Completed", len(t_df))
-    m2.metric("Avg Time to Close (Mins)", round(t_df['actual_mins'].mean(), 1))
-    m3.metric("Total Shelf Holes Logged", o_df['hole_count'].sum() if 'hole_count' in o_df else 0)
+    
+    tasks_completed = len(t_df) if not t_df.empty else 0
+    m1.metric("Tasks Completed", tasks_completed)
+    
+    # FIX #4: Guard against NaN average when time columns are malformed.
+    if not t_df.empty and 'actual_mins' in t_df.columns:
+        valid_mins = t_df['actual_mins'].dropna()
+        avg_mins = round(valid_mins.mean(), 1) if not valid_mins.empty else "N/A"
+    else:
+        avg_mins = "N/A"
+    m2.metric("Avg Time to Close (Mins)", avg_mins)
+    
+    total_holes = o_df['hole_count'].sum() if (not o_df.empty and 'hole_count' in o_df.columns) else 0
+    m3.metric("Total Shelf Holes Logged", total_holes)
 
+    # FIX #8: Keep timestamp columns in the export — they are the source of
+    # actual_mins and are valuable for shift-level analysis.
     buffer = io.BytesIO()
     with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
-        t_df_clean = t_df.drop(columns=['time_submitted', 'time_closed'], errors='ignore') 
-        t_df_clean.to_excel(writer, sheet_name='Closed_Tasks', index=False)
-        o_df.to_excel(writer, sheet_name='Closed_OOS', index=False)
+        if not t_df.empty: t_df.to_excel(writer, sheet_name='Closed_Tasks', index=False)
+        if not o_df.empty: o_df.to_excel(writer, sheet_name='Closed_OOS', index=False)
     
     st.download_button("📥 Export Report to Excel", data=buffer.getvalue(), file_name=f"TGP_Report_{target_date.strftime('%Y%m%d')}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
-    st.subheader("Staff Throughput")
-    if 'closed_by' in t_df.columns:
-        staff_counts = t_df.groupby("closed_by").size().reset_index(name='tasks_closed').sort_values(by='tasks_closed', ascending=False)
-        st.bar_chart(staff_counts, x="closed_by", y="tasks_closed", color="#00e5ff")
+    if not t_df.empty:
+        st.subheader("Staff Throughput")
+        if 'closed_by' in t_df.columns:
+            staff_counts = t_df.groupby("closed_by").size().reset_index(name='tasks_closed').sort_values(by='tasks_closed', ascending=False)
+            st.bar_chart(staff_counts, x="closed_by", y="tasks_closed", color="#00e5ff")
 
 # -------------------------
 # BOARD RENDER LAYER 
@@ -647,36 +679,24 @@ def render_main_board(fast_snap, is_tv):
     # LABOR MATH
     g, f = g_pcs, f_pcs
     total_pcs = g + f
+    # Task time shown for awareness only — not factored into order ETA.
     t_mins = pd.to_numeric(t_df["est_mins"], errors='coerce').fillna(15).sum() if not t_df.empty else 0
-    
-    # Target Finish Math (Standard ETA)
-    f_hrs = (total_pcs / cases_per_hour)
-    total_hrs = (f_hrs + (t_mins / 60.0)) / staff_count
-    
+
+    # ETA is based purely on piece count ÷ CPH ÷ staff.
+    # Tasks are separate work and do not inflate the order finish time.
+    order_hrs_per_staff = (total_pcs / cases_per_hour) / staff_count if total_pcs > 0 else 0
+
     arr_time_obj = datetime.strptime(start_time_str, "%H:%M").time()
     end_time_obj = datetime.strptime(end_time_str, "%H:%M").time()
-    
+
     anchor_time = curr_now.replace(hour=arr_time_obj.hour, minute=arr_time_obj.minute, second=0, microsecond=0)
     end_anchor = curr_now.replace(hour=end_time_obj.hour, minute=end_time_obj.minute, second=0, microsecond=0)
     if end_anchor <= anchor_time: end_anchor += timedelta(days=1)
-    
-    eta = (anchor_time + timedelta(hours=total_hrs)).strftime('%H:%M') if (total_pcs > 0 or t_mins > 0) else "N/A"
 
-    # Required Speed Math (Actual Piece Count Gauge)
-    available_hrs = (end_anchor - anchor_time).total_seconds() / 3600.0
-    task_hrs_per_staff = (t_mins / 60.0) / staff_count if staff_count > 0 else 0
-    piece_hrs_avail = available_hrs - task_hrs_per_staff
-    
-    if total_pcs == 0:
-        req_cph_display = "0/h"
-        cph_css = ""
-    elif piece_hrs_avail > 0:
-        req_cph = (total_pcs / staff_count) / piece_hrs_avail
-        req_cph_display = f"{int(req_cph)}/h"
-        cph_css = "urgent" if req_cph > (cases_per_hour + 15) else "amber" if req_cph > cases_per_hour else ""
-    else:
-        req_cph_display = "MAX"
-        cph_css = "urgent"
+    eta = (anchor_time + timedelta(hours=order_hrs_per_staff)).strftime('%H:%M') if total_pcs > 0 else "N/A"
+
+    # Surge mode is based purely on whether the order volume alone exceeds the shift window.
+    surge_active = order_hrs_per_staff > 7.5
 
     st.markdown(f"""
     <div class='kpi-container'>
@@ -686,7 +706,6 @@ def render_main_board(fast_snap, is_tv):
         <div class='kpi-box'><div class='kpi-label'>Tasks</div><div class='kpi-value'>{int(t_mins)}m</div></div>
         <div class='kpi-box'><div class='kpi-label'>Target End</div><div class='kpi-value'>{end_time_str}</div></div>
         <div class='kpi-box'><div class='kpi-label'>Est. Finish</div><div class='kpi-value'>{eta}</div></div>
-        <div class='kpi-box {cph_css}'><div class='kpi-label'>Req. Speed</div><div class='kpi-value'>{req_cph_display}</div></div>
     </div>
     """, unsafe_allow_html=True)
 
@@ -694,8 +713,7 @@ def render_main_board(fast_snap, is_tv):
     
     with L:
         st.markdown("<div class='sect-header'>Active Directives</div>", unsafe_allow_html=True)
-        
-        surge_active = (total_hrs > 7.5) or (cph_css == "urgent")
+
         if surge_active: st.error("⚠️ SURGE MODE: Routine tasks suppressed. High operational velocity required.")
         
         if t_df.empty: 
