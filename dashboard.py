@@ -410,7 +410,8 @@ with st.sidebar:
             with st.form("ticker_form", clear_on_submit=True):
                 t_msg = st.text_input("Broadcast Live Ticker Message")
                 if st.form_submit_button("Send to Ticker") and t_msg:
-                    supabase.table("ticker").insert({"message": html.escape(t_msg.strip().upper())}).execute()
+                    # FIX APPLIED HERE: Added msg_id generation
+                    supabase.table("ticker").insert({"msg_id": gen_id(), "message": html.escape(t_msg.strip().upper())}).execute()
                     clear_full_cache()
                     st.rerun()
 
