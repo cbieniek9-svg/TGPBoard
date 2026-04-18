@@ -521,8 +521,13 @@ with st.sidebar:
                     supabase.table("oos").update({"status": "Closed", "closed_by": "AUTO", "time_closed": t_now}).eq("status", "Open").execute()
                     supabase.table("special_orders").update({"status": "Closed", "closed_by": "AUTO", "time_closed": t_now}).eq("status", "Open").execute()
                     supabase.table("expected_orders").update({"status": "Closed", "closed_by": "AUTO", "time_closed": t_now}).eq("status", "Pending").execute()
-                    ticker_ids = [t['id'] for t in supabase.table("ticker").select("id").execute().data]
-                    if ticker_ids: supabase.table("ticker").delete().in_("id", ticker_ids).execute()
+                    
+                    try:
+                        # Deletes everything in the ticker safely without needing an 'id' column
+                        supabase.table("ticker").delete().neq("message", "xyz_impossible_match").execute()
+                    except Exception:
+                        pass
+                        
                     clear_full_cache()
                     st.rerun()
 
