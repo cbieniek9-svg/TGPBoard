@@ -155,8 +155,9 @@ def load_fast_data():
     orders = to_df(supabase.table("special_orders").select("*").eq("status", "Open").execute().data)
     expected = to_df(supabase.table("expected_orders").select("*").eq("status", "Pending").execute().data)
 
-    t_res = supabase.table("tasks").select("task_id, task_detail, time_closed, closed_by").eq("status", "Closed").order("time_closed", desc=True).limit(6).execute()
-    o_res = supabase.table("oos").select("oos_id, zone, time_closed, closed_by").eq("status", "Closed").order("time_closed", desc=True).limit(6).execute()
+    # Filter out "AUTO" closures so the terminal gives a clean slate in the morning
+    t_res = supabase.table("tasks").select("task_id, task_detail, time_closed, closed_by").eq("status", "Closed").neq("closed_by", "AUTO").order("time_closed", desc=True).limit(6).execute()
+    o_res = supabase.table("oos").select("oos_id, zone, time_closed, closed_by").eq("status", "Closed").neq("closed_by", "AUTO").order("time_closed", desc=True).limit(6).execute()
     
     audits = []
     for t in t_res.data:
@@ -523,10 +524,13 @@ with st.sidebar:
                     supabase.table("expected_orders").update({"status": "Closed", "closed_by": "AUTO", "time_closed": t_now}).eq("status", "Pending").execute()
                     
                     try:
-                        # Deletes everything in the ticker safely without needing an 'id' column
                         supabase.table("ticker").delete().neq("message", "xyz_impossible_match").execute()
                     except Exception:
                         pass
+                    
+                    # Force the browser to forget any optimistic UI tasks
+                    for key in ["hidden_t", "hidden_o", "hidden_s", "hidden_e"]:
+                        st.session_state[key] = []
                         
                     clear_full_cache()
                     st.rerun()
