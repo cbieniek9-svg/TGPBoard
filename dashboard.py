@@ -155,9 +155,8 @@ def load_fast_data():
     orders = to_df(supabase.table("special_orders").select("*").eq("status", "Open").execute().data)
     expected = to_df(supabase.table("expected_orders").select("*").eq("status", "Pending").execute().data)
 
-    # Filter out "AUTO" closures so the terminal gives a clean slate in the morning
-    t_res = supabase.table("tasks").select("task_id, task_detail, time_closed, closed_by").eq("status", "Closed").neq("closed_by", "AUTO").order("time_closed", desc=True).limit(6).execute()
-    o_res = supabase.table("oos").select("oos_id, zone, time_closed, closed_by").eq("status", "Closed").neq("closed_by", "AUTO").order("time_closed", desc=True).limit(6).execute()
+    t_res = supabase.table("tasks").select("task_id, task_detail, time_closed, closed_by").eq("status", "Closed").order("time_closed", desc=True).limit(6).execute()
+    o_res = supabase.table("oos").select("oos_id, zone, time_closed, closed_by").eq("status", "Closed").order("time_closed", desc=True).limit(6).execute()
     
     audits = []
     for t in t_res.data:
@@ -184,12 +183,12 @@ def load_historical_data(target_date_str=None):
     if target_date_str:
         start_iso = f"{target_date_str}T00:00:00Z"
         end_iso = f"{target_date_str}T23:59:59Z"
-        tasks = to_df(supabase.table("tasks").select("*").eq("status", "Closed").gte("time_closed", start_iso).lte("time_closed", end_iso).execute().data)
-        oos = to_df(supabase.table("oos").select("*").eq("status", "Closed").gte("time_closed", start_iso).lte("time_closed", end_iso).execute().data)
+        tasks = to_df(supabase.table("tasks").select("*").in_("status", ["Closed", "Archived"]).gte("time_closed", start_iso).lte("time_closed", end_iso).execute().data)
+        oos = to_df(supabase.table("oos").select("*").in_("status", ["Closed", "Archived"]).gte("time_closed", start_iso).lte("time_closed", end_iso).execute().data)
     else:
         cutoff = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
-        tasks = to_df(supabase.table("tasks").select("*").eq("status", "Closed").gte("time_closed", cutoff).execute().data)
-        oos = to_df(supabase.table("oos").select("*").eq("status", "Closed").gte("time_closed", cutoff).execute().data)
+        tasks = to_df(supabase.table("tasks").select("*").in_("status", ["Closed", "Archived"]).gte("time_closed", cutoff).execute().data)
+        oos = to_df(supabase.table("oos").select("*").in_("status", ["Closed", "Archived"]).gte("time_closed", cutoff).execute().data)
     
     if not tasks.empty:
         tasks['time_submitted'] = pd.to_datetime(tasks['time_submitted'], errors='coerce')
@@ -497,8 +496,8 @@ with st.sidebar:
 
             with st.expander("🗄️ Data Archival & Pruning"):
                 cutoff_30 = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
-                old_tasks = to_df(supabase.table("tasks").select("*").eq("status", "Closed").lt("time_closed", cutoff_30).execute().data)
-                old_oos = to_df(supabase.table("oos").select("*").eq("status", "Closed").lt("time_closed", cutoff_30).execute().data)
+                old_tasks = to_df(supabase.table("tasks").select("*").in_("status", ["Closed", "Archived"]).lt("time_closed", cutoff_30).execute().data)
+                old_oos = to_df(supabase.table("oos").select("*").in_("status", ["Closed", "Archived"]).lt("time_closed", cutoff_30).execute().data)
                 
                 if old_tasks.empty and old_oos.empty:
                     st.info("No records older than 30 days found.")
@@ -511,24 +510,32 @@ with st.sidebar:
                     st.download_button("📥 1. Download Backup (Excel)", data=arch_buffer.getvalue(), file_name=f"TGP_Archive_{yeg_now().strftime('%Y%m%d')}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
                     st.warning("Download backup before purging!")
                     if st.button("🗑️ 2. Purge Database", type="primary", use_container_width=True):
-                        supabase.table("tasks").delete().eq("status", "Closed").lt("time_closed", cutoff_30).execute()
-                        supabase.table("oos").delete().eq("status", "Closed").lt("time_closed", cutoff_30).execute()
+                        supabase.table("tasks").delete().in_("status", ["Closed", "Archived"]).lt("time_closed", cutoff_30).execute()
+                        supabase.table("oos").delete().in_("status", ["Closed", "Archived"]).lt("time_closed", cutoff_30).execute()
                         st.rerun()
 
             with st.expander("🚨 Full Board Reset"):
                 if st.button("Execute EOD Sweep", type="primary"):
                     t_now = utc_now_iso()
-                    supabase.table("tasks").update({"status": "Closed", "closed_by": "AUTO", "time_closed": t_now}).eq("status", "Open").execute()
-                    supabase.table("oos").update({"status": "Closed", "closed_by": "AUTO", "time_closed": t_now}).eq("status", "Open").execute()
-                    supabase.table("special_orders").update({"status": "Closed", "closed_by": "AUTO", "time_closed": t_now}).eq("status", "Open").execute()
-                    supabase.table("expected_orders").update({"status": "Closed", "closed_by": "AUTO", "time_closed": t_now}).eq("status", "Pending").execute()
+                    
+                    # 1. Archive Active Items as AUTO
+                    supabase.table("tasks").update({"status": "Archived", "closed_by": "AUTO", "time_closed": t_now}).eq("status", "Open").execute()
+                    supabase.table("oos").update({"status": "Archived", "closed_by": "AUTO", "time_closed": t_now}).eq("status", "Open").execute()
+                    supabase.table("special_orders").update({"status": "Archived", "closed_by": "AUTO", "time_closed": t_now}).eq("status", "Open").execute()
+                    supabase.table("expected_orders").update({"status": "Archived", "closed_by": "AUTO", "time_closed": t_now}).eq("status", "Pending").execute()
+                    
+                    # 2. Archive already closed items so they drop off the Audit Terminal
+                    supabase.table("tasks").update({"status": "Archived"}).eq("status", "Closed").execute()
+                    supabase.table("oos").update({"status": "Archived"}).eq("status", "Closed").execute()
+                    supabase.table("special_orders").update({"status": "Archived"}).eq("status", "Closed").execute()
+                    supabase.table("expected_orders").update({"status": "Archived"}).eq("status", "Closed").execute()
                     
                     try:
                         supabase.table("ticker").delete().neq("message", "xyz_impossible_match").execute()
                     except Exception:
                         pass
                     
-                    # Force the browser to forget any optimistic UI tasks
+                    # Flush the Optimistic UI Memory Banks
                     for key in ["hidden_t", "hidden_o", "hidden_s", "hidden_e"]:
                         st.session_state[key] = []
                         
