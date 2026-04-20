@@ -69,11 +69,10 @@ div[data-testid="stVerticalBlock"] {{ gap: 0.4rem !important; }}
 .header-title {{ font-size: 2.2em; font-weight: 300; color: #eef5ff; letter-spacing: 5px; margin: 0 0 0 75px; line-height: 0.9; }}
 .header-time {{ color: #88ccff; font-size: 1.3em; font-weight: 400; margin: 0; letter-spacing: 2px; }}
 
-/* SECRET TV ADMIN CORNER */
-.secret-tv-btn {{ position: absolute; left: 0; bottom: -4px; width: 80px; height: 30px; z-index: 999999; cursor: pointer; border-radius: 10px 0 0 10px; display: flex; align-items: center; justify-content: center; text-decoration: none; pointer-events: all !important; }}
-.secret-tv-btn::after {{ content: '⚙️'; font-size: 14px; opacity: 0; transition: opacity 0.2s; pointer-events: none; }}
-.secret-tv-btn:hover {{ background: rgba(255, 255, 255, 0.4); }}
-.secret-tv-btn:hover::after {{ opacity: 1; }}
+/* BULLETPROOF TV SETTINGS BUTTON */
+.secret-tv-btn {{ position: fixed; top: 15px; left: 15px; width: 45px; height: 45px; z-index: 9999999; cursor: pointer; display: flex; align-items: center; justify-content: center; text-decoration: none; background: rgba(31, 59, 92, 0.8); border: 2px solid #00e5ff; border-radius: 10px; opacity: 0.3; transition: all 0.3s ease-in-out; box-shadow: 0 0 10px rgba(0, 0, 0, 0.5); }}
+.secret-tv-btn::after {{ content: '⚙️'; font-size: 22px; }}
+.secret-tv-btn:hover {{ opacity: 1; background: rgba(0, 229, 255, 0.2); transform: scale(1.05); }}
 
 /* SHIFT NOTES & ALERTS */
 .alert-banner {{ background: #ff3333; color: #ffffff; padding: 10px 20px; font-weight: bold; border-radius: 5px; margin-bottom: 15px; border-left: 10px solid #990000; letter-spacing: 2px; }}
@@ -262,7 +261,6 @@ def assign_task(task_id, widget_key):
         supabase.table("tasks").update({"assigned_to": str(staff)}).eq("task_id", str(task_id)).execute()
         clear_fast_cache()
     except Exception as e:
-        # Prevent the red screen of death and let the user know the DB blocked it
         st.toast(f"Database blocked assignment to '{staff}'. Check your Staff table.", icon="🛑")
 
 def complete_task(task_id, user):
@@ -754,7 +752,7 @@ def render_main_board(fast_snap, is_tv):
         st.progress(seasonal_progress / 100.0, text=f"Seasonal Changeover Progress: {seasonal_progress}%")
 
     # THE SECRET TV MENU BUTTON IS EMBEDDED DIRECTLY OVER THE ORANGE BAR HERE
-    tv_secret_html = "<a href='?tvmode=true&settings=true' target='_self' class='secret-tv-btn' title='Open TV Settings'></a>" if is_tv else ""
+    tv_secret_html = "<a href='/?tvmode=true&settings=true' target='_top' class='secret-tv-btn' title='Open TV Settings'></a>" if is_tv else ""
 
     st.markdown(f"<div class='header-bar'>{tv_secret_html}<div class='header-title'>TGP CENTRE STORE // {curr_now.strftime('%A')}</div><div class='header-time'>{curr_now.strftime('%b %d, %Y')} | {curr_now.strftime('%H:%M')}</div></div>", unsafe_allow_html=True)
 
