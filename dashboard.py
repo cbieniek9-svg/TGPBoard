@@ -40,82 +40,6 @@ for key in ["hidden_t", "hidden_o", "hidden_s", "hidden_e"]:
     if key not in st.session_state: st.session_state[key] = []
     if len(st.session_state[key]) > 100: st.session_state[key] = st.session_state[key][-50:]
 
-font_scale = st.session_state.get("ui_font_scale", 100)
-
-st.markdown(f"""
-<style>
-footer {{ visibility: hidden; }}
-#MainMenu {{ visibility: hidden; }}
-
-/* BASE TYPOGRAPHY & SCALING */
-html, body, .stApp {{ font-size: {font_scale}%; background-color: #000000; color: #88ccff; font-family: 'Arial Narrow', 'Arial', sans-serif; overflow-x: hidden; text-transform: uppercase; }}
-
-/* HEADER TOGGLE FIX */
-@media screen and (min-width: 1025px) {{
-    header[data-testid="stHeader"] {{ visibility: hidden; }}
-    .block-container {{ padding-top: 0.5rem; padding-bottom: 3rem; padding-left: 1rem; padding-right: 1rem; max-width: 98vw !important; margin: auto; }}
-}}
-@media screen and (max-width: 1024px) {{
-    header[data-testid="stHeader"] {{ visibility: visible !important; background-color: #000000; }}
-    .block-container {{ padding-top: 3rem; padding-bottom: 5rem; padding-left: 0.5rem; padding-right: 0.5rem; max-width: 100vw !important; }}
-}}
-
-div[data-testid="column"] {{ min-width: 0 !important; }}
-div[data-testid="stVerticalBlock"] {{ gap: 0.4rem !important; }}
-
-/* HEADER BAR */
-.header-bar {{ display: flex; align-items: flex-end; justify-content: space-between; border-bottom: 4px solid #ffaa00; margin-bottom: 15px; padding-bottom: 8px; padding-top: 10px; position: relative; }}
-.header-bar::before {{ content: ''; position: absolute; left: 0; bottom: -4px; width: 60px; height: 20px; background: #ffaa00; border-radius: 10px 0 0 10px; }}
-.header-title {{ font-size: 2.2em; font-weight: 300; color: #eef5ff; letter-spacing: 5px; margin: 0 0 0 75px; line-height: 0.9; }}
-.header-time {{ color: #88ccff; font-size: 1.3em; font-weight: 400; margin: 0; letter-spacing: 2px; }}
-
-/* SHIFT NOTES & ALERTS */
-.alert-banner {{ background: #ff3333; color: #ffffff; padding: 10px 20px; font-weight: bold; border-radius: 5px; margin-bottom: 15px; border-left: 10px solid #990000; letter-spacing: 2px; }}
-.shift-note {{ background: rgba(31, 59, 92, 0.4); border-left: 4px solid #00e5ff; padding: 10px 15px; margin-bottom: 15px; color: #eef5ff; font-size: 1.1em; }}
-
-/* KPI GRID */
-.kpi-container {{ display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 10px; margin-bottom: 20px; width: 100%; }}
-.kpi-box {{ background: rgba(11, 26, 46, 0.6); border-right: 5px solid #00e5ff; padding: 10px 15px; border-radius: 15px 0 0 15px; display: flex; flex-direction: column; justify-content: center; }}
-.kpi-box.urgent {{ border-right-color: #ff3333; background: rgba(42, 10, 10, 0.6); }}
-.kpi-box.amber {{ border-right-color: #ffaa00; background: rgba(42, 31, 10, 0.6); }}
-.kpi-label {{ font-size: 0.8em; font-weight: 700; color: #6699cc; letter-spacing: 2px; margin-bottom: 2px; white-space: nowrap; }}
-.kpi-value {{ font-size: 1.6em; font-weight: 300; color: #ffffff; white-space: nowrap; line-height: 1; }}
-
-/* DATA CARDS */
-.data-card {{ background: rgba(11, 26, 46, 0.5); border-left: 6px solid #00e5ff; padding: 12px 15px; margin-bottom: 8px; border-radius: 0 20px 20px 0; font-size: 1em; line-height: 1.4; display: flex; justify-content: space-between; align-items: center; letter-spacing: 1px; }}
-.data-urgent {{ border-left-color: #ff3333; background: rgba(42, 10, 10, 0.5); color: #ffcccc; }}
-.data-high {{ border-left-color: #ffaa00; background: rgba(42, 31, 10, 0.5); color: #ffebcc; }}
-.card-zone {{ font-weight: 700; color: inherit; letter-spacing: 2px; margin-right: 8px; font-size: 0.9em; opacity: 0.8;}}
-.card-meta {{ font-size: 0.75em; text-align: right; color: #6699cc; letter-spacing: 1px; }}
-.card-meta strong {{ color: #00e5ff; font-size: 1.1em; }}
-
-/* TERMINAL / LOGS */
-.terminal-box {{ background: rgba(10, 5, 20, 0.8); border-left: 3px solid #a855f7; border-radius: 0 10px 10px 0; padding: 12px; font-family: 'Courier New', monospace; font-size: 0.85em; color: #9ca3af; margin-top: 15px; text-transform: none; }}
-.term-line {{ margin-bottom: 6px; border-bottom: 1px dotted #2d1b4e; padding-bottom: 4px; display: flex; justify-content: space-between; align-items: center; text-transform: uppercase; }}
-.term-content {{ flex-grow: 1; }}
-.term-time {{ color: #a855f7; font-weight: bold; margin-right: 10px; }}
-.term-user {{ color: #00e5ff; font-weight: bold; margin-right: 8px; }}
-.undo-btn {{ background: transparent; color: #ffaa00; border: 1px solid #ffaa00; border-radius: 10px; font-size: 0.8em; padding: 2px 8px; cursor: pointer; }}
-
-/* SECTION HEADERS */
-.sect-header {{ font-size: 1.1em; font-weight: 400; color: #ffffff; border-bottom: 1px solid #1f3b5c; padding-bottom: 5px; margin: 15px 0 10px 0; letter-spacing: 4px; display: flex; align-items: center; }}
-.sect-header::before {{ content: ''; display: inline-block; width: 30px; height: 12px; background: #00e5ff; border-radius: 6px 0 0 6px; margin-right: 12px; }}
-
-/* TICKER */
-.ticker-wrap {{ width: 100%; overflow: hidden; background-color: #cc2222; padding: 6px 0; position: fixed; bottom: 0; left: 0; z-index: 999; border-top: 2px solid #ff3333; }}
-.ticker {{ display: inline-block; white-space: nowrap; padding-left: 100%; animation: ticker 25s linear infinite; color: #fff; font-size: 1.1em; font-weight: 700; letter-spacing: 3px; }}
-@keyframes ticker {{ 0% {{ transform: translate3d(0, 0, 0); }} 100% {{ transform: translate3d(-100%, 0, 0); }} }}
-
-/* BUTTONS */
-div[data-testid="stButton"] > button {{ border-radius: 20px; border: 1px solid #00e5ff; background: transparent; color: #00e5ff; font-weight: 700; width: 100%; padding: 0px 5px !important; min-height: 38px !important; letter-spacing: 2px; transition: all 0.2s; }}
-div[data-testid="stButton"] > button:hover {{ background: #00e5ff; color: #000; box-shadow: 0 0 10px rgba(0, 229, 255, 0.4); }}
-
-/* NEW VISIBLE TV SETTINGS BUTTON */
-.tv-scale-btn {{ display: block; width: 100%; text-align: center; background: transparent; color: #ffaa00; border: 1px solid #ffaa00; padding: 6px 5px; border-radius: 20px; text-decoration: none; font-weight: 700; letter-spacing: 2px; transition: all 0.2s; margin-top: 5px; }}
-.tv-scale-btn:hover {{ background: #ffaa00; color: #000; box-shadow: 0 0 10px rgba(255, 170, 0, 0.4); }}
-</style>
-""", unsafe_allow_html=True)
-
 # -------------------------
 # CONSTANTS & SUPABASE API
 # -------------------------
@@ -216,6 +140,9 @@ def clear_full_cache():
     load_fast_data.clear()
     load_slow_data.clear()
 
+# -------------------------
+# LOAD DATA BEFORE CSS INJECTION
+# -------------------------
 fast_data = load_fast_data()
 slow_data = load_slow_data()
 
@@ -230,6 +157,8 @@ staff_count = max(1, int(c_df["staff"].iloc[0])) if not c_df.empty else 1
 master_staff = staff_df[staff_df["name"] != "Unassigned"]["name"].tolist() if not staff_df.empty else PREMIUM_STAFF
 active_staff = staff_df[(staff_df["active"] == 1) & (staff_df["name"] != "Unassigned")]["name"].tolist() if not staff_df.empty else PREMIUM_STAFF
 
+# Base defaults
+font_scale = 100 
 admin_pin_hash = ""
 cases_per_hour = 55.0
 start_time_str = "07:00"
@@ -250,6 +179,84 @@ if not set_df.empty:
     shift_notes = str(get_set("Shift_Notes", ""))
     is_critical_alert = str(get_set("Critical_Alert", "0")) == "1"
     seasonal_progress = int(get_set("Seasonal_Progress", 0))
+    font_scale = int(float(get_set("TV_Scale", 100))) # Pulled directly from Database!
+
+# -------------------------
+# CSS INJECTION
+# -------------------------
+st.markdown(f"""
+<style>
+footer {{ visibility: hidden; }}
+#MainMenu {{ visibility: hidden; }}
+
+/* BASE TYPOGRAPHY & SCALING */
+html, body, .stApp {{ font-size: {font_scale}%; background-color: #000000; color: #88ccff; font-family: 'Arial Narrow', 'Arial', sans-serif; overflow-x: hidden; text-transform: uppercase; }}
+
+/* HEADER TOGGLE FIX */
+@media screen and (min-width: 1025px) {{
+    header[data-testid="stHeader"] {{ visibility: hidden; }}
+    .block-container {{ padding-top: 0.5rem; padding-bottom: 3rem; padding-left: 1rem; padding-right: 1rem; max-width: 98vw !important; margin: auto; }}
+}}
+@media screen and (max-width: 1024px) {{
+    header[data-testid="stHeader"] {{ visibility: visible !important; background-color: #000000; }}
+    .block-container {{ padding-top: 3rem; padding-bottom: 5rem; padding-left: 0.5rem; padding-right: 0.5rem; max-width: 100vw !important; }}
+}}
+
+div[data-testid="column"] {{ min-width: 0 !important; }}
+div[data-testid="stVerticalBlock"] {{ gap: 0.4rem !important; }}
+
+/* HEADER BAR */
+.header-bar {{ display: flex; align-items: flex-end; justify-content: space-between; border-bottom: 4px solid #ffaa00; margin-bottom: 15px; padding-bottom: 8px; padding-top: 10px; position: relative; }}
+.header-bar::before {{ content: ''; position: absolute; left: 0; bottom: -4px; width: 60px; height: 20px; background: #ffaa00; border-radius: 10px 0 0 10px; }}
+.header-title {{ font-size: 2.2em; font-weight: 300; color: #eef5ff; letter-spacing: 5px; margin: 0 0 0 75px; line-height: 0.9; }}
+.header-time {{ color: #88ccff; font-size: 1.3em; font-weight: 400; margin: 0; letter-spacing: 2px; }}
+
+/* SHIFT NOTES & ALERTS */
+.alert-banner {{ background: #ff3333; color: #ffffff; padding: 10px 20px; font-weight: bold; border-radius: 5px; margin-bottom: 15px; border-left: 10px solid #990000; letter-spacing: 2px; }}
+.shift-note {{ background: rgba(31, 59, 92, 0.4); border-left: 4px solid #00e5ff; padding: 10px 15px; margin-bottom: 15px; color: #eef5ff; font-size: 1.1em; }}
+
+/* KPI GRID */
+.kpi-container {{ display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 10px; margin-bottom: 20px; width: 100%; }}
+.kpi-box {{ background: rgba(11, 26, 46, 0.6); border-right: 5px solid #00e5ff; padding: 10px 15px; border-radius: 15px 0 0 15px; display: flex; flex-direction: column; justify-content: center; }}
+.kpi-box.urgent {{ border-right-color: #ff3333; background: rgba(42, 10, 10, 0.6); }}
+.kpi-box.amber {{ border-right-color: #ffaa00; background: rgba(42, 31, 10, 0.6); }}
+.kpi-label {{ font-size: 0.8em; font-weight: 700; color: #6699cc; letter-spacing: 2px; margin-bottom: 2px; white-space: nowrap; }}
+.kpi-value {{ font-size: 1.6em; font-weight: 300; color: #ffffff; white-space: nowrap; line-height: 1; }}
+
+/* DATA CARDS */
+.data-card {{ background: rgba(11, 26, 46, 0.5); border-left: 6px solid #00e5ff; padding: 12px 15px; margin-bottom: 8px; border-radius: 0 20px 20px 0; font-size: 1em; line-height: 1.4; display: flex; justify-content: space-between; align-items: center; letter-spacing: 1px; }}
+.data-urgent {{ border-left-color: #ff3333; background: rgba(42, 10, 10, 0.5); color: #ffcccc; }}
+.data-high {{ border-left-color: #ffaa00; background: rgba(42, 31, 10, 0.5); color: #ffebcc; }}
+.card-zone {{ font-weight: 700; color: inherit; letter-spacing: 2px; margin-right: 8px; font-size: 0.9em; opacity: 0.8;}}
+.card-meta {{ font-size: 0.75em; text-align: right; color: #6699cc; letter-spacing: 1px; }}
+.card-meta strong {{ color: #00e5ff; font-size: 1.1em; }}
+
+/* TERMINAL / LOGS */
+.terminal-box {{ background: rgba(10, 5, 20, 0.8); border-left: 3px solid #a855f7; border-radius: 0 10px 10px 0; padding: 12px; font-family: 'Courier New', monospace; font-size: 0.85em; color: #9ca3af; margin-top: 15px; text-transform: none; }}
+.term-line {{ margin-bottom: 6px; border-bottom: 1px dotted #2d1b4e; padding-bottom: 4px; display: flex; justify-content: space-between; align-items: center; text-transform: uppercase; }}
+.term-content {{ flex-grow: 1; }}
+.term-time {{ color: #a855f7; font-weight: bold; margin-right: 10px; }}
+.term-user {{ color: #00e5ff; font-weight: bold; margin-right: 8px; }}
+.undo-btn {{ background: transparent; color: #ffaa00; border: 1px solid #ffaa00; border-radius: 10px; font-size: 0.8em; padding: 2px 8px; cursor: pointer; }}
+
+/* SECTION HEADERS */
+.sect-header {{ font-size: 1.1em; font-weight: 400; color: #ffffff; border-bottom: 1px solid #1f3b5c; padding-bottom: 5px; margin: 15px 0 10px 0; letter-spacing: 4px; display: flex; align-items: center; }}
+.sect-header::before {{ content: ''; display: inline-block; width: 30px; height: 12px; background: #00e5ff; border-radius: 6px 0 0 6px; margin-right: 12px; }}
+
+/* TICKER */
+.ticker-wrap {{ width: 100%; overflow: hidden; background-color: #cc2222; padding: 6px 0; position: fixed; bottom: 0; left: 0; z-index: 999; border-top: 2px solid #ff3333; }}
+.ticker {{ display: inline-block; white-space: nowrap; padding-left: 100%; animation: ticker 25s linear infinite; color: #fff; font-size: 1.1em; font-weight: 700; letter-spacing: 3px; }}
+@keyframes ticker {{ 0% {{ transform: translate3d(0, 0, 0); }} 100% {{ transform: translate3d(-100%, 0, 0); }} }}
+
+/* BUTTONS */
+div[data-testid="stButton"] > button {{ border-radius: 20px; border: 1px solid #00e5ff; background: transparent; color: #00e5ff; font-weight: 700; width: 100%; padding: 0px 5px !important; min-height: 38px !important; letter-spacing: 2px; transition: all 0.2s; }}
+div[data-testid="stButton"] > button:hover {{ background: #00e5ff; color: #000; box-shadow: 0 0 10px rgba(0, 229, 255, 0.4); }}
+
+/* NEW VISIBLE TV SETTINGS BUTTON */
+.tv-scale-btn {{ display: block; width: 100%; text-align: center; background: transparent; color: #ffaa00; border: 1px solid #ffaa00; padding: 6px 5px; border-radius: 20px; text-decoration: none; font-weight: 700; letter-spacing: 2px; transition: all 0.2s; margin-top: 5px; }}
+.tv-scale-btn:hover {{ background: #ffaa00; color: #000; box-shadow: 0 0 10px rgba(255, 170, 0, 0.4); }}
+</style>
+""", unsafe_allow_html=True)
 
 # -------------------------
 # NATIVE REST WRITE ACTIONS
@@ -549,7 +556,7 @@ if not is_cs_mode and not is_tv_settings_mode:
                 with st.expander("⚙️ System Config"):
                     new_scale = st.slider("TV UI Scale (%)", 80, 150, font_scale, step=5)
                     if st.button("Save Scale"):
-                        st.session_state["ui_font_scale"] = new_scale
+                        update_setting("TV_Scale", new_scale)
                         st.rerun()
                         
                     st.divider()
@@ -673,7 +680,7 @@ def render_tv_settings():
     st.markdown("<br>", unsafe_allow_html=True)
     c1, c2 = st.columns(2)
     if c1.button("✅ Save & Return to Board", type="primary", use_container_width=True):
-        st.session_state["ui_font_scale"] = new_scale
+        update_setting("TV_Scale", new_scale)
         if "settings" in st.query_params: del st.query_params["settings"]
         st.rerun()
         
