@@ -69,12 +69,16 @@ div[data-testid="stVerticalBlock"] {{ gap: 0.4rem !important; }}
 .header-title {{ font-size: 2.2em; font-weight: 300; color: #eef5ff; letter-spacing: 5px; margin: 0 0 0 75px; line-height: 0.9; }}
 .header-time {{ color: #88ccff; font-size: 1.3em; font-weight: 400; margin: 0; letter-spacing: 2px; }}
 
+/* SECRET TV ADMIN CORNER */
+.secret-tv-btn {{ position: absolute; left: 0; bottom: -4px; width: 75px; height: 24px; z-index: 9999; cursor: pointer; border-radius: 10px 0 0 10px; display: block; }}
+.secret-tv-btn:hover {{ background: rgba(255, 255, 255, 0.3); }}
+
 /* SHIFT NOTES & ALERTS */
 .alert-banner {{ background: #ff3333; color: #ffffff; padding: 10px 20px; font-weight: bold; border-radius: 5px; margin-bottom: 15px; border-left: 10px solid #990000; letter-spacing: 2px; }}
 .shift-note {{ background: rgba(31, 59, 92, 0.4); border-left: 4px solid #00e5ff; padding: 10px 15px; margin-bottom: 15px; color: #eef5ff; font-size: 1.1em; }}
 
 /* KPI GRID */
-.kpi-container {{ display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 10px; margin-bottom: 20px; width: 100%; }}
+.kpi-container {{ display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 10px; margin-bottom: 20px; width: 100%; }}
 .kpi-box {{ background: rgba(11, 26, 46, 0.6); border-right: 5px solid #00e5ff; padding: 10px 15px; border-radius: 15px 0 0 15px; display: flex; flex-direction: column; justify-content: center; }}
 .kpi-box.urgent {{ border-right-color: #ff3333; background: rgba(42, 10, 10, 0.6); }}
 .kpi-box.amber {{ border-right-color: #ffaa00; background: rgba(42, 31, 10, 0.6); }}
@@ -130,7 +134,9 @@ ORDER_LOCATIONS = ["1", "2", "3", "22"]
 aisles = ["Aisle 1", "Aisle 2", "Aisle 3", "Aisle 4", "Aisle 5", "Aisle 6", "Aisle 7", "Aisle 8", "Receiving", "Freezer", "Bakery", "Outside"]
 
 query_params = st.query_params
-is_tv_url_mode = str(query_params.get("tvmode", "")).lower() in ["true", "1", "yes"]
+is_tv_url_mode = "tvmode" in query_params or str(query_params.get("tvmode", "")).lower() in ["true", "1", "yes"]
+is_cs_mode = str(query_params.get("mode", "")).lower() in ["cs", "desk", "service"]
+is_tv_settings_mode = "settings" in query_params or str(query_params.get("settings", "")).lower() in ["true", "1", "yes"]
 
 # Native REST API Setup
 try:
@@ -155,7 +161,6 @@ def load_fast_data():
     orders = to_df(supabase.table("special_orders").select("*").eq("status", "Open").execute().data)
     expected = to_df(supabase.table("expected_orders").select("*").eq("status", "Pending").execute().data)
 
-    # Filter out "AUTO" closures so the terminal gives a clean slate in the morning
     t_res = supabase.table("tasks").select("task_id, task_detail, time_closed, closed_by").eq("status", "Closed").neq("closed_by", "AUTO").order("time_closed", desc=True).limit(6).execute()
     o_res = supabase.table("oos").select("oos_id, zone, time_closed, closed_by").eq("status", "Closed").neq("closed_by", "AUTO").order("time_closed", desc=True).limit(6).execute()
     
@@ -265,15 +270,13 @@ def complete_expected_order(exp_id, user):
     supabase.table("expected_orders").update({"status": "Closed", "closed_by": user, "time_closed": utc_now_iso()}).eq("exp_id", str(exp_id)).execute()
     clear_fast_cache()
 
-# FIX #2: Use None instead of "" for timestamp/text columns on undo to avoid
-# Postgres type errors on timestamp columns.
 def undo_action(item_id, item_type):
     if item_type == "task":
         if item_id in st.session_state["hidden_t"]: st.session_state["hidden_t"].remove(item_id)
-        supabase.table("tasks").update({"status": "Open", "closed_by": None, "time_closed": None}).eq("task_id", str(item_id)).execute()
+        supabase.table("tasks").update({"status": "Open", "closed_by": "", "time_closed": ""}).eq("task_id", str(item_id)).execute()
     elif item_type == "oos":
         if item_id in st.session_state["hidden_o"]: st.session_state["hidden_o"].remove(item_id)
-        supabase.table("oos").update({"status": "Open", "closed_by": None, "time_closed": None}).eq("oos_id", str(item_id)).execute()
+        supabase.table("oos").update({"status": "Open", "closed_by": "", "time_closed": ""}).eq("oos_id", str(item_id)).execute()
     clear_fast_cache()
 
 def execute_omni_command(cmd, user, is_quick_key=False):
@@ -287,24 +290,17 @@ def execute_omni_command(cmd, user, is_quick_key=False):
         if z.lower() in cmd_l: zone = z; break
     if "receiving" in cmd_l or "bale" in cmd_l: zone = "Receiving"
 
-    desc = html.escape(cmd.strip().upper())
+    desc = cmd.strip().upper()
     supabase.table("tasks").insert({
         "task_id": gen_id(), "task_detail": desc, "status": "Open", "priority": pri, 
         "zone": zone, "assigned_to": "Unassigned", "est_mins": 15, 
-        "time_submitted": utc_now_iso(), "closed_by": None, "time_closed": None
+        "time_submitted": utc_now_iso(), "closed_by": "", "time_closed": ""
     }).execute()
     
     if not is_quick_key: st.toast(f"SYSTEM: Deploying '{desc}'", icon="⚙️")
     clear_fast_cache()
 
-# FIX #6: Guard against loading rhythm when open tasks already exist,
-# preventing duplicate task creation if the button is pressed multiple times.
 def load_daily_rhythm(grocery_pcs, frozen_pcs, staff_num, cph):
-    existing = supabase.table("tasks").select("task_id").eq("status", "Open").execute()
-    if existing.data:
-        st.warning("Open tasks already exist. Run an EOD Sweep first to clear the board before loading a new rhythm.")
-        return
-
     hrs_math = (((grocery_pcs + frozen_pcs) / cph) / staff_num) * 60 if (grocery_pcs + frozen_pcs) > 0 else 120
     curr_date = yeg_now()
     curr_day = curr_date.strftime('%A')
@@ -339,15 +335,15 @@ def load_daily_rhythm(grocery_pcs, frozen_pcs, staff_num, cph):
         task_inserts.append({
             "task_id": gen_id(), "task_detail": d["Task"].upper(), "status": "Open", 
             "priority": d["Priority"], "zone": d["Zone"], "assigned_to": "Unassigned", 
-            "est_mins": d["Time"], "time_submitted": utc_now_iso(), "closed_by": None, "time_closed": None
+            "est_mins": d["Time"], "time_submitted": utc_now_iso(), "closed_by": "", "time_closed": ""
         })
     if task_inserts: supabase.table("tasks").insert(task_inserts).execute()
     
     exp_inserts = []
     for v in VENDOR_SCHEDULE.get(curr_day, []):
         exp_inserts.append({
-            "exp_id": gen_id(), "vendor": v, "expected_day": curr_day, 
-            "status": "Pending", "logged_by": "AUTO", "closed_by": None, "time_closed": None
+            "exp_id": gen_id(), "vendor": v.upper(), "expected_day": curr_day, 
+            "status": "Pending", "logged_by": "AUTO", "closed_by": "", "time_closed": ""
         })
     if exp_inserts: supabase.table("expected_orders").insert(exp_inserts).execute()
                     
@@ -360,231 +356,270 @@ def update_setting(name, value):
     clear_full_cache()
 
 # -------------------------
-# SIDEBAR OPERATIONAL CONTROLS
+# SIDEBAR OPERATIONAL CONTROLS (HIDDEN IN CS MODE)
 # -------------------------
-with st.sidebar:
-    # FIX #5: Static connection indicator — the blinking logic was rerun-dependent,
-    # not timer-based, so it didn't actually animate. A static indicator is more honest.
-    st.markdown("<div style='display:flex; align-items:center;'><div style='width:10px;height:10px;border-radius:50%;background-color:#00ff00;margin-right:10px;box-shadow:0 0 8px #00ff00;'></div><div style='color:#00e5ff; font-weight:300; letter-spacing:3px; font-size: 18px;'>UPLINK ACTIVE</div></div>", unsafe_allow_html=True)
-    st.markdown("<br>", unsafe_allow_html=True)
-    
-    tv_toggle = st.toggle("📺 Local TV Display Mode", key="tv_toggle")
-    should_auto_refresh = is_tv_url_mode or tv_toggle
-
-    active_op = st.selectbox("Operator:", PREMIUM_STAFF)
-
-    @st.fragment
-    def render_sidebar_tools():
-        if not should_auto_refresh and not st.session_state.get("show_analytics", False):
-            if st.button("🔄 Force Sync Now"):
-                clear_fast_cache()
-                st.rerun() 
-
-        with st.form("omni_form", clear_on_submit=True):
-            st.markdown("**System Command Line**", unsafe_allow_html=True)
-            omni_cmd = st.text_input("Natural Language Entry", placeholder="e.g. urgent spill in aisle 4")
-            if st.form_submit_button("Deploy Command") and omni_cmd.strip(): execute_omni_command(omni_cmd, active_op)
+if not is_cs_mode and not is_tv_settings_mode:
+    with st.sidebar:
+        conn_color = "#00ff00" if (datetime.now().second % 10) < 5 else "#00cc00"
+        st.markdown(f"<div style='display:flex; align-items:center;'><div style='width:10px;height:10px;border-radius:50%;background-color:{conn_color};margin-right:10px;box-shadow:0 0 8px {conn_color};'></div><div style='color:#00e5ff; font-weight:300; letter-spacing:3px; font-size: 18px;'>UPLINK ACTIVE</div></div>", unsafe_allow_html=True)
+        st.markdown("<br>", unsafe_allow_html=True)
         
-        c1, c2, c3 = st.columns(3)
-        if c1.button("💦 Spill", use_container_width=True): execute_omni_command("Urgent Spill in General", active_op, True)
-        if c2.button("📦 Bale", use_container_width=True): execute_omni_command("High Priority Make Cardboard Bale", active_op, True)
-        if c3.button("🧹 Sweep", use_container_width=True): execute_omni_command("High Priority Store Safety Sweep", active_op, True)
+        tv_toggle = st.toggle("📺 Local TV Display Mode", key="tv_toggle")
+        should_auto_refresh = is_tv_url_mode or tv_toggle
 
-        with st.expander("➕ Manual Task Override"):
-            with st.form("manual_task", clear_on_submit=True):
-                m_task = st.text_input("Task Description")
-                m_pri = st.selectbox("Priority", ["Routine", "High", "Urgent"])
-                m_zone = st.selectbox("Zone", ["General"] + aisles)
-                m_time = st.number_input("Est. Mins", min_value=1, value=15)
-                if st.form_submit_button("Deploy Task") and m_task:
-                    supabase.table("tasks").insert({
-                        "task_id": gen_id(), "task_detail": html.escape(m_task.strip().upper()), 
-                        "status": "Open", "priority": m_pri, "zone": m_zone, 
-                        "assigned_to": "Unassigned", "est_mins": m_time, 
-                        "time_submitted": utc_now_iso(), "closed_by": None, "time_closed": None
-                    }).execute()
+        active_op = st.selectbox("Operator:", PREMIUM_STAFF)
+
+        @st.fragment
+        def render_sidebar_tools():
+            if not should_auto_refresh and not st.session_state.get("show_analytics", False):
+                if st.button("🔄 Force Sync Now"):
                     clear_fast_cache()
+                    st.rerun() 
 
-        st.divider()
-
-        with st.expander("📝 Shift Notes & Ticker"):
-            new_note = st.text_area("Pass the baton:", value=shift_notes, height=100)
-            is_crit = st.checkbox("Mark as Critical Alert", value=is_critical_alert)
-            if st.button("Save Handover Notes"):
-                update_setting("Shift_Notes", html.escape(new_note.strip()))
-                update_setting("Critical_Alert", "1" if is_crit else "0")
-                st.toast("Notes Updated", icon="✅")
-                st.rerun()
+            with st.form("omni_form", clear_on_submit=True):
+                st.markdown("**System Command Line**", unsafe_allow_html=True)
+                omni_cmd = st.text_input("Natural Language Entry", placeholder="e.g. urgent spill in aisle 4")
+                if st.form_submit_button("Deploy Command") and omni_cmd.strip(): execute_omni_command(omni_cmd, active_op)
             
-            st.markdown("<hr style='margin: 10px 0; border-color: #1f3b5c;'>", unsafe_allow_html=True)
-            with st.form("ticker_form", clear_on_submit=True):
-                t_msg = st.text_input("Broadcast Live Ticker Message")
-                if st.form_submit_button("Send to Ticker") and t_msg:
-                    supabase.table("ticker").insert({"msg_id": gen_id(), "message": html.escape(t_msg.strip().upper())}).execute()
-                    clear_full_cache()
+            c1, c2, c3 = st.columns(3)
+            if c1.button("💦 Spill", use_container_width=True): execute_omni_command("Urgent Spill in General", active_op, True)
+            if c2.button("📦 Bale", use_container_width=True): execute_omni_command("High Priority Make Cardboard Bale", active_op, True)
+            if c3.button("🧹 Sweep", use_container_width=True): execute_omni_command("High Priority Store Safety Sweep", active_op, True)
+
+            with st.expander("➕ Manual Task Override"):
+                with st.form("manual_task", clear_on_submit=True):
+                    m_task = st.text_input("Task Description")
+                    m_pri = st.selectbox("Priority", ["Routine", "High", "Urgent"])
+                    m_zone = st.selectbox("Zone", ["General"] + aisles)
+                    m_time = st.number_input("Est. Mins", min_value=1, value=15)
+                    if st.form_submit_button("Deploy Task") and m_task:
+                        supabase.table("tasks").insert({
+                            "task_id": gen_id(), "task_detail": m_task.strip().upper(), 
+                            "status": "Open", "priority": m_pri, "zone": m_zone, 
+                            "assigned_to": "Unassigned", "est_mins": m_time, 
+                            "time_submitted": utc_now_iso(), "closed_by": "", "time_closed": ""
+                        }).execute()
+                        clear_fast_cache()
+
+            st.divider()
+
+            with st.expander("📝 Shift Notes & Ticker"):
+                new_note = st.text_area("Pass the baton:", value=shift_notes, height=100)
+                is_crit = st.checkbox("Mark as Critical Alert", value=is_critical_alert)
+                if st.button("Save Handover Notes"):
+                    update_setting("Shift_Notes", html.escape(new_note.strip()))
+                    update_setting("Critical_Alert", "1" if is_crit else "0")
+                    st.toast("Notes Updated", icon="✅")
                     st.rerun()
-
-        with st.expander("👥 Shift Roster Settings"):
-            selected_active = st.multiselect("Active Today:", master_staff, default=active_staff)
-            if st.button("Update Roster"):
-                supabase.table("staff").update({"active": 0}).neq("name", "Unassigned").execute()
-                if selected_active: supabase.table("staff").update({"active": 1}).in_("name", selected_active).execute()
-                clear_full_cache()
-                st.rerun()
-            st.markdown("<hr style='margin: 10px 0; border-color: #1f3b5c;'>", unsafe_allow_html=True)
-            new_staff = st.text_input("Add New Team Member")
-            if st.button("Add to Database") and new_staff.strip():
-                supabase.table("staff").insert({"name": html.escape(new_staff.strip().title()), "active": 1}).execute()
-                clear_full_cache()
-                st.rerun()
-
-        with st.form("load_form"):
-            c_time1, c_time2 = st.columns(2)
-            in_arr = c_time1.time_input("Start of Order", value=datetime.strptime(start_time_str, "%H:%M").time())
-            in_end = c_time2.time_input("End of Order", value=datetime.strptime(end_time_str, "%H:%M").time())
-            
-            c1, c2 = st.columns(2)
-            in_g = c1.number_input("Groc Pcs", min_value=0, value=g_pcs)
-            in_f = c2.number_input("Froz Pcs", min_value=0, value=f_pcs)
-            in_s = st.number_input("Active Staff", min_value=1, value=staff_count)
-            if st.form_submit_button("Calculate Labor"):
-                supabase.table("counts").update({"grocery": in_g, "frozen": in_f, "staff": in_s, "last_update": utc_now_iso()}).eq("id", 1).execute()
-                update_setting("Start_Time", in_arr.strftime("%H:%M"))
-                update_setting("End_Time", in_end.strftime("%H:%M"))
-                st.rerun()
-
-        with st.form("oos_form", clear_on_submit=True):
-            o_z = st.selectbox("Log Shelf Holes", aisles[:8] + ["Freezer", "Bakery"])
-            c1, c2 = st.columns(2)
-            o_c = c1.number_input("Qty Holes", min_value=1, value=1)
-            o_n = c2.text_input("Notes")
-            if st.form_submit_button("Log OOS"):
-                supabase.table("oos").insert({
-                    "oos_id": gen_id(), "zone": o_z, "hole_count": o_c, 
-                    "notes": html.escape(o_n.strip().upper()), "status": "Open", 
-                    "logged_by": active_op, "time_logged": utc_now_iso(), "closed_by": None, "time_closed": None
-                }).execute()
-                clear_fast_cache()
-
-        with st.expander("🛠️ Advanced Loggers"):
-            with st.form("order_form", clear_on_submit=True):
-                st.caption("Log Special Order")
-                c_loc = st.selectbox("Location", ORDER_LOCATIONS)
-                c_item = st.text_input("Item")
-                c_name = st.text_input("Customer Name")
-                if st.form_submit_button("Log Order") and c_item:
-                    supabase.table("special_orders").insert({
-                        "order_id": gen_id(), "customer": html.escape(c_name.strip().upper()), 
-                        "item": html.escape(c_item.strip().upper()), "contact": "", 
-                        "location": c_loc, "status": "Open", "logged_by": active_op, 
-                        "time_logged": utc_now_iso(), "closed_by": None, "time_closed": None
-                    }).execute()
-                    clear_fast_cache()
-            
-            with st.form("vendor_form", clear_on_submit=True):
-                e_ven = st.text_input("Log Expected Vendor")
-                if st.form_submit_button("Log") and e_ven:
-                    supabase.table("expected_orders").insert({
-                        "exp_id": gen_id(), "vendor": html.escape(e_ven.strip().upper()), 
-                        "expected_day": yeg_now().strftime("%A"), "status": "Pending", 
-                        "logged_by": active_op, "closed_by": None, "time_closed": None
-                    }).execute()
-                    clear_fast_cache()
-            
-            new_prog = st.slider("Seasonal Changeover %", 0, 100, seasonal_progress, step=10)
-            if st.button("Update Tracker"):
-                update_setting("Seasonal_Progress", new_prog)
-                st.rerun()
-
-        # --- LOCKED ADMIN CONSOLE ---
-        st.divider()
-        st.markdown("### 🔒 SYSTEM ADMIN")
-        
-        admin_pass = st.text_input("Admin PIN", type="password")
-        
-        # FIX #1: Admin PIN bypass — when no PIN is set, show a setup prompt instead
-        # of silently granting full admin access to anyone.
-        pin_is_configured = admin_pin_hash != ""
-        pin_is_correct = pin_is_configured and (hash_pin(admin_pass) == admin_pin_hash)
-
-        if not pin_is_configured:
-            st.warning("No Admin PIN set. Configure one in the settings table (Admin_PIN).")
-        elif pin_is_correct:
-            st.success("Admin Unlocked")
-        
-        if pin_is_correct or not pin_is_configured:
-            if st.button("⬅️ Close Analytics" if st.session_state.get("show_analytics", False) else "📈 Launch Analytics", type="primary", use_container_width=True):
-                st.session_state["show_analytics"] = not st.session_state.get("show_analytics", False)
-                st.rerun()
                 
-            with st.expander("⚙️ System Config"):
-                new_scale = st.slider("TV UI Scale (%)", 80, 150, font_scale, step=5)
-                if st.button("Save Scale"):
-                    st.session_state["ui_font_scale"] = new_scale
-                    st.rerun()
-                    
-                st.divider()
-                st.caption("Database Health (Rows)")
-                try:
-                    t_count = supabase.table("tasks").select("*", count="exact").execute().count
-                    o_count = supabase.table("oos").select("*", count="exact").execute().count
-                    st.code(f"Tasks Table: {t_count}\nOOS Table: {o_count}")
-                except: st.code("DB Read Error")
-                
-                if st.button("🚨 HARD REBOOT SERVER"):
-                    clear_full_cache()
-                    st.toast("Server Cache Flushed", icon="🔥")
-                    st.rerun()
-
-            with st.expander("🗄️ Data Archival & Pruning"):
-                cutoff_30 = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
-                old_tasks = to_df(supabase.table("tasks").select("*").in_("status", ["Closed", "Archived"]).lt("time_closed", cutoff_30).execute().data)
-                old_oos = to_df(supabase.table("oos").select("*").in_("status", ["Closed", "Archived"]).lt("time_closed", cutoff_30).execute().data)
-                
-                if old_tasks.empty and old_oos.empty:
-                    st.info("No records older than 30 days found.")
-                else:
-                    st.success(f"Found {len(old_tasks)} old tasks.")
-                    arch_buffer = io.BytesIO()
-                    with pd.ExcelWriter(arch_buffer, engine='openpyxl') as writer:
-                        if not old_tasks.empty: old_tasks.to_excel(writer, sheet_name='Archived_Tasks', index=False)
-                        if not old_oos.empty: old_oos.to_excel(writer, sheet_name='Archived_OOS', index=False)
-                    st.download_button("📥 1. Download Backup (Excel)", data=arch_buffer.getvalue(), file_name=f"TGP_Archive_{yeg_now().strftime('%Y%m%d')}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
-                    st.warning("Download backup before purging!")
-                    if st.button("🗑️ 2. Purge Database", type="primary", use_container_width=True):
-                        supabase.table("tasks").delete().in_("status", ["Closed", "Archived"]).lt("time_closed", cutoff_30).execute()
-                        supabase.table("oos").delete().in_("status", ["Closed", "Archived"]).lt("time_closed", cutoff_30).execute()
+                st.markdown("<hr style='margin: 10px 0; border-color: #1f3b5c;'>", unsafe_allow_html=True)
+                with st.form("ticker_form", clear_on_submit=True):
+                    t_msg = st.text_input("Broadcast Live Ticker Message")
+                    if st.form_submit_button("Send to Ticker") and t_msg:
+                        supabase.table("ticker").insert({"msg_id": gen_id(), "message": html.escape(t_msg.strip().upper())}).execute()
+                        clear_full_cache()
                         st.rerun()
 
-            with st.expander("🚨 Full Board Reset"):
-                if st.button("Execute EOD Sweep", type="primary"):
-                    t_now = utc_now_iso()
-                    
-                    # 1. Archive Active Items as AUTO
-                    supabase.table("tasks").update({"status": "Archived", "closed_by": "AUTO", "time_closed": t_now}).eq("status", "Open").execute()
-                    supabase.table("oos").update({"status": "Archived", "closed_by": "AUTO", "time_closed": t_now}).eq("status", "Open").execute()
-                    supabase.table("special_orders").update({"status": "Archived", "closed_by": "AUTO", "time_closed": t_now}).eq("status", "Open").execute()
-                    supabase.table("expected_orders").update({"status": "Archived", "closed_by": "AUTO", "time_closed": t_now}).eq("status", "Pending").execute()
-                    
-                    # 2. Archive already closed items so they drop off the Audit Terminal
-                    supabase.table("tasks").update({"status": "Archived"}).eq("status", "Closed").execute()
-                    supabase.table("oos").update({"status": "Archived"}).eq("status", "Closed").execute()
-                    supabase.table("special_orders").update({"status": "Archived"}).eq("status", "Closed").execute()
-                    supabase.table("expected_orders").update({"status": "Archived"}).eq("status", "Closed").execute()
-                    
-                    try:
-                        supabase.table("ticker").delete().neq("message", "xyz_impossible_match").execute()
-                    except Exception:
-                        pass
-                    
-                    # Flush the Optimistic UI Memory Banks
-                    for key in ["hidden_t", "hidden_o", "hidden_s", "hidden_e"]:
-                        st.session_state[key] = []
-                        
+            with st.expander("👥 Shift Roster Settings"):
+                selected_active = st.multiselect("Active Today:", master_staff, default=active_staff)
+                if st.button("Update Roster"):
+                    supabase.table("staff").update({"active": 0}).neq("name", "Unassigned").execute()
+                    if selected_active: supabase.table("staff").update({"active": 1}).in_("name", selected_active).execute()
+                    clear_full_cache()
+                    st.rerun()
+                st.markdown("<hr style='margin: 10px 0; border-color: #1f3b5c;'>", unsafe_allow_html=True)
+                new_staff = st.text_input("Add New Team Member")
+                if st.button("Add to Database") and new_staff.strip():
+                    supabase.table("staff").insert({"name": new_staff.strip().title(), "active": 1}).execute()
                     clear_full_cache()
                     st.rerun()
 
-    render_sidebar_tools()
+            with st.form("load_form"):
+                c_time1, c_time2 = st.columns(2)
+                in_arr = c_time1.time_input("Start of Order", value=datetime.strptime(start_time_str, "%H:%M").time())
+                in_end = c_time2.time_input("End of Order", value=datetime.strptime(end_time_str, "%H:%M").time())
+                
+                c1, c2 = st.columns(2)
+                in_g = c1.number_input("Groc Pcs", min_value=0, value=g_pcs)
+                in_f = c2.number_input("Froz Pcs", min_value=0, value=f_pcs)
+                in_s = st.number_input("Active Staff", min_value=1, value=staff_count)
+                if st.form_submit_button("Calculate Labor"):
+                    supabase.table("counts").update({"grocery": in_g, "frozen": in_f, "staff": in_s, "last_update": utc_now_iso()}).eq("id", 1).execute()
+                    update_setting("Start_Time", in_arr.strftime("%H:%M"))
+                    update_setting("End_Time", in_end.strftime("%H:%M"))
+                    st.rerun()
+
+            with st.form("oos_form", clear_on_submit=True):
+                o_z = st.selectbox("Log Shelf Holes", aisles[:8] + ["Freezer", "Bakery"])
+                c1, c2 = st.columns(2)
+                o_c = c1.number_input("Qty Holes", min_value=1, value=1)
+                o_n = c2.text_input("Notes")
+                if st.form_submit_button("Log OOS"):
+                    supabase.table("oos").insert({
+                        "oos_id": gen_id(), "zone": o_z, "hole_count": o_c, 
+                        "notes": o_n.strip().upper(), "status": "Open", 
+                        "logged_by": active_op, "time_logged": utc_now_iso(), "closed_by": "", "time_closed": ""
+                    }).execute()
+                    clear_fast_cache()
+
+            with st.expander("🛠️ Advanced Loggers"):
+                with st.form("vendor_form", clear_on_submit=True):
+                    e_ven = st.text_input("Log Expected Vendor")
+                    if st.form_submit_button("Log") and e_ven:
+                        supabase.table("expected_orders").insert({
+                            "exp_id": gen_id(), "vendor": e_ven.strip().upper(), 
+                            "expected_day": yeg_now().strftime("%A"), "status": "Pending", 
+                            "logged_by": active_op, "closed_by": "", "time_closed": ""
+                        }).execute()
+                        clear_fast_cache()
+                
+                new_prog = st.slider("Seasonal Changeover %", 0, 100, seasonal_progress, step=10)
+                if st.button("Update Tracker"):
+                    update_setting("Seasonal_Progress", new_prog)
+                    st.rerun()
+
+            # --- LOCKED ADMIN CONSOLE ---
+            st.divider()
+            st.markdown("### 🔒 SYSTEM ADMIN")
+            
+            admin_pass = st.text_input("Admin PIN", type="password")
+            
+            if (admin_pin_hash == "") or (hash_pin(admin_pass) == admin_pin_hash):
+                st.success("Admin Unlocked")
+                
+                if st.button("⬅️ Close Analytics" if st.session_state.get("show_analytics", False) else "📈 Launch Analytics", type="primary", use_container_width=True):
+                    st.session_state["show_analytics"] = not st.session_state.get("show_analytics", False)
+                    st.rerun()
+                    
+                with st.expander("⚙️ System Config"):
+                    new_scale = st.slider("TV UI Scale (%)", 80, 150, font_scale, step=5)
+                    if st.button("Save Scale"):
+                        st.session_state["ui_font_scale"] = new_scale
+                        st.rerun()
+                        
+                    st.divider()
+                    st.caption("Database Health (Rows)")
+                    try:
+                        t_count = supabase.table("tasks").select("*", count="exact").execute().count
+                        o_count = supabase.table("oos").select("*", count="exact").execute().count
+                        st.code(f"Tasks Table: {t_count}\nOOS Table: {o_count}")
+                    except: st.code("DB Read Error")
+                    
+                    if st.button("🚨 HARD REBOOT SERVER"):
+                        clear_full_cache()
+                        st.toast("Server Cache Flushed", icon="🔥")
+                        st.rerun()
+
+                with st.expander("🗄️ Data Archival & Pruning"):
+                    cutoff_30 = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
+                    old_tasks = to_df(supabase.table("tasks").select("*").in_("status", ["Closed", "Archived"]).lt("time_closed", cutoff_30).execute().data)
+                    old_oos = to_df(supabase.table("oos").select("*").in_("status", ["Closed", "Archived"]).lt("time_closed", cutoff_30).execute().data)
+                    
+                    if old_tasks.empty and old_oos.empty:
+                        st.info("No records older than 30 days found.")
+                    else:
+                        st.success(f"Found {len(old_tasks)} old tasks.")
+                        arch_buffer = io.BytesIO()
+                        with pd.ExcelWriter(arch_buffer, engine='openpyxl') as writer:
+                            if not old_tasks.empty: old_tasks.to_excel(writer, sheet_name='Archived_Tasks', index=False)
+                            if not old_oos.empty: old_oos.to_excel(writer, sheet_name='Archived_OOS', index=False)
+                        st.download_button("📥 1. Download Backup (Excel)", data=arch_buffer.getvalue(), file_name=f"TGP_Archive_{yeg_now().strftime('%Y%m%d')}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
+                        st.warning("Download backup before purging!")
+                        if st.button("🗑️ 2. Purge Database", type="primary", use_container_width=True):
+                            supabase.table("tasks").delete().in_("status", ["Closed", "Archived"]).lt("time_closed", cutoff_30).execute()
+                            supabase.table("oos").delete().in_("status", ["Closed", "Archived"]).lt("time_closed", cutoff_30).execute()
+                            st.rerun()
+
+                with st.expander("🚨 Full Board Reset"):
+                    if st.button("Execute EOD Sweep", type="primary"):
+                        t_now = utc_now_iso()
+                        
+                        # 1. Archive Active Items as AUTO
+                        supabase.table("tasks").update({"status": "Archived", "closed_by": "AUTO", "time_closed": t_now}).eq("status", "Open").execute()
+                        supabase.table("oos").update({"status": "Archived", "closed_by": "AUTO", "time_closed": t_now}).eq("status", "Open").execute()
+                        supabase.table("special_orders").update({"status": "Archived", "closed_by": "AUTO", "time_closed": t_now}).eq("status", "Open").execute()
+                        supabase.table("expected_orders").update({"status": "Archived", "closed_by": "AUTO", "time_closed": t_now}).eq("status", "Pending").execute()
+                        
+                        # 2. Archive already closed items so they drop off the Audit Terminal
+                        supabase.table("tasks").update({"status": "Archived"}).eq("status", "Closed").execute()
+                        supabase.table("oos").update({"status": "Archived"}).eq("status", "Closed").execute()
+                        supabase.table("special_orders").update({"status": "Archived"}).eq("status", "Closed").execute()
+                        supabase.table("expected_orders").update({"status": "Archived"}).eq("status", "Closed").execute()
+                        
+                        try:
+                            supabase.table("ticker").delete().neq("message", "xyz_impossible_match").execute()
+                        except Exception:
+                            pass
+                        
+                        # Flush the Optimistic UI Memory Banks
+                        for key in ["hidden_t", "hidden_o", "hidden_s", "hidden_e"]:
+                            st.session_state[key] = []
+                            
+                        clear_full_cache()
+                        st.rerun()
+
+        render_sidebar_tools()
+
+# -------------------------
+# CUSTOMER SERVICE PORTAL
+# -------------------------
+def render_cs_desk():
+    st.markdown("<div class='header-bar'><div class='header-title'>CUSTOMER SERVICE // SPECIAL ORDERS</div></div>", unsafe_allow_html=True)
+    st.write("Log items requested by customers here. They will instantly appear on the Operations board on the floor.")
+
+    with st.form("cs_order_form", clear_on_submit=True):
+        c1, c2 = st.columns(2)
+        c_name = c1.text_input("Customer Name (Required)")
+        c_contact = c2.text_input("Contact Info (Phone/Email)")
+
+        i1, i2 = st.columns([3, 1])
+        c_item = i1.text_input("Item Description (Required)")
+        c_loc = i2.selectbox("Order Location", ORDER_LOCATIONS)
+
+        cs_rep = st.text_input("Your Name (CS Rep)")
+
+        submit = st.form_submit_button("SEND TO FLOOR 🚀", use_container_width=True)
+
+        if submit:
+            if c_name and c_item and cs_rep:
+                try:
+                    supabase.table("special_orders").insert({
+                        "order_id": gen_id(),
+                        "customer": c_name.strip().upper(),
+                        "item": c_item.strip().upper(),
+                        "contact": c_contact.strip().upper(),
+                        "location": c_loc,
+                        "status": "Open",
+                        "logged_by": cs_rep.strip().upper(),
+                        "time_logged": utc_now_iso(),
+                        "closed_by": "",
+                        "time_closed": ""
+                    }).execute()
+                    st.success(f"✅ Order for {c_name} has been sent to the floor!")
+                except Exception as e:
+                    st.error("Failed to send order. Check connection.")
+            else:
+                st.warning("⚠️ Please fill out the Customer Name, Item Description, and Your Name.")
+
+# -------------------------
+# SECRET TV SETTINGS MENU
+# -------------------------
+def render_tv_settings():
+    st.markdown("<div class='header-bar'><div class='header-title'>TV MODE // DISPLAY SETTINGS</div></div>", unsafe_allow_html=True)
+    st.info("⏸️ Auto-scroll is currently paused. Adjust the zoom level below.")
+    
+    new_scale = st.slider("TV UI Scale (%)", 80, 200, font_scale, step=5)
+    
+    st.markdown("<br>", unsafe_allow_html=True)
+    c1, c2 = st.columns(2)
+    if c1.button("✅ Save & Return to Board", type="primary", use_container_width=True):
+        st.session_state["ui_font_scale"] = new_scale
+        if "settings" in st.query_params: del st.query_params["settings"]
+        st.rerun()
+        
+    if c2.button("❌ Cancel", use_container_width=True):
+        if "settings" in st.query_params: del st.query_params["settings"]
+        st.rerun()
 
 # -------------------------
 # ANALYTICS (TIME MACHINE)
@@ -599,43 +634,28 @@ def render_analytics():
     t_df = history["tasks"]
     o_df = history["oos"]
     
-    # FIX #3: Use 'and' so analytics still renders when only one table has data.
-    # Each metric section handles its own empty state independently.
-    if t_df.empty and o_df.empty:
+    if t_df.empty or o_df.empty:
         st.warning(f"No closed data found for {target_date.strftime('%B %d, %Y')}.")
         return
 
     st.divider()
     m1, m2, m3 = st.columns(3)
-    
-    tasks_completed = len(t_df) if not t_df.empty else 0
-    m1.metric("Tasks Completed", tasks_completed)
-    
-    # FIX #4: Guard against NaN average when time columns are malformed.
-    if not t_df.empty and 'actual_mins' in t_df.columns:
-        valid_mins = t_df['actual_mins'].dropna()
-        avg_mins = round(valid_mins.mean(), 1) if not valid_mins.empty else "N/A"
-    else:
-        avg_mins = "N/A"
-    m2.metric("Avg Time to Close (Mins)", avg_mins)
-    
-    total_holes = o_df['hole_count'].sum() if (not o_df.empty and 'hole_count' in o_df.columns) else 0
-    m3.metric("Total Shelf Holes Logged", total_holes)
+    m1.metric("Tasks Completed", len(t_df))
+    m2.metric("Avg Time to Close (Mins)", round(t_df['actual_mins'].mean(), 1))
+    m3.metric("Total Shelf Holes Logged", o_df['hole_count'].sum() if 'hole_count' in o_df else 0)
 
-    # FIX #8: Keep timestamp columns in the export — they are the source of
-    # actual_mins and are valuable for shift-level analysis.
     buffer = io.BytesIO()
     with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
-        if not t_df.empty: t_df.to_excel(writer, sheet_name='Closed_Tasks', index=False)
-        if not o_df.empty: o_df.to_excel(writer, sheet_name='Closed_OOS', index=False)
+        t_df_clean = t_df.drop(columns=['time_submitted', 'time_closed'], errors='ignore') 
+        t_df_clean.to_excel(writer, sheet_name='Closed_Tasks', index=False)
+        o_df.to_excel(writer, sheet_name='Closed_OOS', index=False)
     
     st.download_button("📥 Export Report to Excel", data=buffer.getvalue(), file_name=f"TGP_Report_{target_date.strftime('%Y%m%d')}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
-    if not t_df.empty:
-        st.subheader("Staff Throughput")
-        if 'closed_by' in t_df.columns:
-            staff_counts = t_df.groupby("closed_by").size().reset_index(name='tasks_closed').sort_values(by='tasks_closed', ascending=False)
-            st.bar_chart(staff_counts, x="closed_by", y="tasks_closed", color="#00e5ff")
+    st.subheader("Staff Throughput")
+    if 'closed_by' in t_df.columns:
+        staff_counts = t_df.groupby("closed_by").size().reset_index(name='tasks_closed').sort_values(by='tasks_closed', ascending=False)
+        st.bar_chart(staff_counts, x="closed_by", y="tasks_closed", color="#00e5ff")
 
 # -------------------------
 # BOARD RENDER LAYER 
@@ -669,51 +689,53 @@ def render_main_board(fast_snap, is_tv):
     if seasonal_progress > 0 and seasonal_progress < 100:
         st.progress(seasonal_progress / 100.0, text=f"Seasonal Changeover Progress: {seasonal_progress}%")
 
-    st.markdown(f"""
-    <div class='header-bar'>
-        <div class='header-title'>TGP CENTRE STORE // {curr_now.strftime('%A')}</div>
-        <div class='header-time'>{curr_now.strftime('%b %d, %Y')} | {curr_now.strftime('%H:%M')}</div>
-    </div>
-    """, unsafe_allow_html=True)
+    # THE SECRET TV MENU BUTTON IS EMBEDDED DIRECTLY OVER THE ORANGE BAR HERE
+    tv_secret_html = "<a href='/?tvmode=true&settings=true' target='_self' class='secret-tv-btn' title='Open TV Settings'></a>" if is_tv else ""
+
+    st.markdown(f"<div class='header-bar'>{tv_secret_html}<div class='header-title'>TGP CENTRE STORE // {curr_now.strftime('%A')}</div><div class='header-time'>{curr_now.strftime('%b %d, %Y')} | {curr_now.strftime('%H:%M')}</div></div>", unsafe_allow_html=True)
 
     # LABOR MATH
     g, f = g_pcs, f_pcs
     total_pcs = g + f
-    # Task time shown for awareness only — not factored into order ETA.
     t_mins = pd.to_numeric(t_df["est_mins"], errors='coerce').fillna(15).sum() if not t_df.empty else 0
-
-    # ETA is based purely on piece count ÷ CPH ÷ staff.
-    # Tasks are separate work and do not inflate the order finish time.
-    order_hrs_per_staff = (total_pcs / cases_per_hour) / staff_count if total_pcs > 0 else 0
-
+    
+    # Target Finish Math (Standard ETA)
+    f_hrs = (total_pcs / cases_per_hour)
+    total_hrs = (f_hrs + (t_mins / 60.0)) / staff_count
+    
     arr_time_obj = datetime.strptime(start_time_str, "%H:%M").time()
     end_time_obj = datetime.strptime(end_time_str, "%H:%M").time()
-
+    
     anchor_time = curr_now.replace(hour=arr_time_obj.hour, minute=arr_time_obj.minute, second=0, microsecond=0)
     end_anchor = curr_now.replace(hour=end_time_obj.hour, minute=end_time_obj.minute, second=0, microsecond=0)
     if end_anchor <= anchor_time: end_anchor += timedelta(days=1)
+    
+    eta = (anchor_time + timedelta(hours=total_hrs)).strftime('%H:%M') if (total_pcs > 0 or t_mins > 0) else "N/A"
 
-    eta = (anchor_time + timedelta(hours=order_hrs_per_staff)).strftime('%H:%M') if total_pcs > 0 else "N/A"
+    # Required Speed Math (Actual Piece Count Gauge)
+    available_hrs = (end_anchor - anchor_time).total_seconds() / 3600.0
+    task_hrs_per_staff = (t_mins / 60.0) / staff_count if staff_count > 0 else 0
+    piece_hrs_avail = available_hrs - task_hrs_per_staff
+    
+    if total_pcs == 0:
+        req_cph_display = "0/h"
+        cph_css = ""
+    elif piece_hrs_avail > 0:
+        req_cph = (total_pcs / staff_count) / piece_hrs_avail
+        req_cph_display = f"{int(req_cph)}/h"
+        cph_css = "urgent" if req_cph > (cases_per_hour + 15) else "amber" if req_cph > cases_per_hour else ""
+    else:
+        req_cph_display = "MAX"
+        cph_css = "urgent"
 
-    # Surge mode is based purely on whether the order volume alone exceeds the shift window.
-    surge_active = order_hrs_per_staff > 7.5
-
-    st.markdown(f"""
-    <div class='kpi-container'>
-        <div class='kpi-box'><div class='kpi-label'>Grocery</div><div class='kpi-value'>{g}</div></div>
-        <div class='kpi-box'><div class='kpi-label'>Frozen</div><div class='kpi-value'>{f}</div></div>
-        <div class='kpi-box'><div class='kpi-label'>Staff</div><div class='kpi-value'>{staff_count}</div></div>
-        <div class='kpi-box'><div class='kpi-label'>Tasks</div><div class='kpi-value'>{int(t_mins)}m</div></div>
-        <div class='kpi-box'><div class='kpi-label'>Target End</div><div class='kpi-value'>{end_time_str}</div></div>
-        <div class='kpi-box'><div class='kpi-label'>Est. Finish</div><div class='kpi-value'>{eta}</div></div>
-    </div>
-    """, unsafe_allow_html=True)
+    st.markdown(f"<div class='kpi-container'><div class='kpi-box'><div class='kpi-label'>Grocery</div><div class='kpi-value'>{g}</div></div><div class='kpi-box'><div class='kpi-label'>Frozen</div><div class='kpi-value'>{f}</div></div><div class='kpi-box'><div class='kpi-label'>Staff</div><div class='kpi-value'>{staff_count}</div></div><div class='kpi-box'><div class='kpi-label'>Tasks</div><div class='kpi-value'>{int(t_mins)}m</div></div><div class='kpi-box'><div class='kpi-label'>Target End</div><div class='kpi-value'>{end_time_str}</div></div><div class='kpi-box'><div class='kpi-label'>Est. Finish</div><div class='kpi-value'>{eta}</div></div><div class='kpi-box {cph_css}'><div class='kpi-label'>Req. Speed</div><div class='kpi-value'>{req_cph_display}</div></div></div>", unsafe_allow_html=True)
 
     L, R = st.columns([0.65, 0.35], gap="small")
     
     with L:
         st.markdown("<div class='sect-header'>Active Directives</div>", unsafe_allow_html=True)
-
+        
+        surge_active = (total_hrs > 7.5) or (cph_css == "urgent")
         if surge_active: st.error("⚠️ SURGE MODE: Routine tasks suppressed. High operational velocity required.")
         
         if t_df.empty: 
@@ -780,18 +802,19 @@ def render_main_board(fast_snap, is_tv):
                 c1.markdown(oos_html, unsafe_allow_html=True)
                 c2.button("CLR", key=f"o_{r['oos_id']}", on_click=complete_oos, args=(r['oos_id'], active_op))
 
-        st.markdown("<div class='sect-header'>Logistics Pipeline</div>", unsafe_allow_html=True)
-        if not s_df.empty:
-            for _, r in s_df.iterrows():
-                c1, c2 = st.columns([0.80, 0.20], gap="small")
-                c1.markdown(f"<div class='data-card' style='border-left-color:#a855f7;'><span class='card-zone'>L:{r['location']}</span> {html.escape(r['item'])}</div>", unsafe_allow_html=True)
-                if not is_tv: c2.button("PU", key=f"s_{r['order_id']}", on_click=complete_special_order, args=(r['order_id'], active_op))
-                    
-        if not e_df.empty:
-            for _, r in e_df.iterrows():
-                c1, c2 = st.columns([0.80, 0.20], gap="small")
-                c1.markdown(f"<div class='data-card' style='border-left-color:#ffaa00;'>🚚 <span class='card-zone'>{html.escape(r['vendor'])}</span></div>", unsafe_allow_html=True)
-                if not is_tv: c2.button("RCV", key=f"e_{r['exp_id']}", on_click=complete_expected_order, args=(r['exp_id'], active_op))
+        st.markdown("<div class='sect-header'>Incoming Customer Orders</div>", unsafe_allow_html=True)
+        if s_df.empty: st.caption("No pending customer orders.")
+        for _, r in s_df.iterrows():
+            c1, c2 = st.columns([0.80, 0.20], gap="small")
+            c1.markdown(f"<div class='data-card' style='border-left-color:#a855f7;'><div><span class='card-zone'>L:{r['location']}</span> {html.escape(r['item'])}</div><div class='card-meta'>{html.escape(r.get('customer', ''))}</div></div>", unsafe_allow_html=True)
+            if not is_tv: c2.button("DONE", key=f"s_{r['order_id']}", on_click=complete_special_order, args=(r['order_id'], active_op))
+                
+        st.markdown("<div class='sect-header'>Vendor Deliveries</div>", unsafe_allow_html=True)
+        if e_df.empty: st.caption("No pending vendor deliveries.")
+        for _, r in e_df.iterrows():
+            c1, c2 = st.columns([0.80, 0.20], gap="small")
+            c1.markdown(f"<div class='data-card' style='border-left-color:#ffaa00;'>🚚 <span class='card-zone'>{html.escape(r['vendor'])}</span></div>", unsafe_allow_html=True)
+            if not is_tv: c2.button("RCV", key=f"e_{r['exp_id']}", on_click=complete_expected_order, args=(r['exp_id'], active_op))
 
         st.divider()
         if not is_tv:
@@ -809,7 +832,8 @@ def render_main_board(fast_snap, is_tv):
 # -------------------------
 # JS INJECTIONS (TV SCROLL)
 # -------------------------
-if is_tv_url_mode:
+# Completely block auto-scroll if the TV settings menu is open or in CS mode
+if is_tv_url_mode and not is_tv_settings_mode and not is_cs_mode:
     st.markdown("""
     <script>
     const scrollApp = () => {
@@ -827,7 +851,11 @@ if is_tv_url_mode:
 # -------------------------
 # ENTRYPOINT & LOGIC
 # -------------------------
-if st.session_state.get("show_analytics", False):
+if is_cs_mode:
+    render_cs_desk()
+elif is_tv_settings_mode:
+    render_tv_settings()
+elif st.session_state.get("show_analytics", False):
     render_analytics()
 else:
     if should_auto_refresh:
