@@ -70,8 +70,10 @@ div[data-testid="stVerticalBlock"] {{ gap: 0.4rem !important; }}
 .header-time {{ color: #88ccff; font-size: 1.3em; font-weight: 400; margin: 0; letter-spacing: 2px; }}
 
 /* SECRET TV ADMIN CORNER */
-.secret-tv-btn {{ position: absolute; left: 0; bottom: -4px; width: 75px; height: 24px; z-index: 9999; cursor: pointer; border-radius: 10px 0 0 10px; display: block; }}
-.secret-tv-btn:hover {{ background: rgba(255, 255, 255, 0.3); }}
+.secret-tv-btn {{ position: absolute; left: 0; bottom: -4px; width: 60px; height: 20px; z-index: 99999; cursor: pointer; border-radius: 10px 0 0 10px; display: flex; align-items: center; justify-content: center; text-decoration: none; }}
+.secret-tv-btn::after {{ content: '⚙️'; font-size: 12px; opacity: 0; transition: opacity 0.2s; }}
+.secret-tv-btn:hover {{ background: rgba(255, 255, 255, 0.4); }}
+.secret-tv-btn:hover::after {{ opacity: 1; }}
 
 /* SHIFT NOTES & ALERTS */
 .alert-banner {{ background: #ff3333; color: #ffffff; padding: 10px 20px; font-weight: bold; border-radius: 5px; margin-bottom: 15px; border-left: 10px solid #990000; letter-spacing: 2px; }}
