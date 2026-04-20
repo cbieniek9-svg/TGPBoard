@@ -257,38 +257,57 @@ if not set_df.empty:
 # NATIVE REST WRITE ACTIONS
 # -------------------------
 def assign_task(task_id, widget_key):
-    staff = st.session_state[widget_key]
-    supabase.table("tasks").update({"assigned_to": staff}).eq("task_id", str(task_id)).execute()
-    clear_fast_cache()
+    staff = st.session_state.get(widget_key, "Unassigned")
+    try:
+        supabase.table("tasks").update({"assigned_to": str(staff)}).eq("task_id", str(task_id)).execute()
+        clear_fast_cache()
+    except Exception as e:
+        # Prevent the red screen of death and let the user know the DB blocked it
+        st.toast(f"Database blocked assignment to '{staff}'. Check your Staff table.", icon="🛑")
 
 def complete_task(task_id, user):
     st.session_state["hidden_t"].append(str(task_id)) 
-    supabase.table("tasks").update({"status": "Closed", "closed_by": user, "time_closed": utc_now_iso()}).eq("task_id", str(task_id)).execute()
-    clear_fast_cache()
+    try:
+        supabase.table("tasks").update({"status": "Closed", "closed_by": user, "time_closed": utc_now_iso()}).eq("task_id", str(task_id)).execute()
+        clear_fast_cache()
+    except Exception as e:
+        pass
 
 def complete_oos(oos_id, user):
     st.session_state["hidden_o"].append(str(oos_id))
-    supabase.table("oos").update({"status": "Closed", "closed_by": user, "time_closed": utc_now_iso()}).eq("oos_id", str(oos_id)).execute()
-    clear_fast_cache()
+    try:
+        supabase.table("oos").update({"status": "Closed", "closed_by": user, "time_closed": utc_now_iso()}).eq("oos_id", str(oos_id)).execute()
+        clear_fast_cache()
+    except Exception as e:
+        pass
 
 def complete_special_order(order_id, user):
     st.session_state["hidden_s"].append(str(order_id))
-    supabase.table("special_orders").update({"status": "Closed", "closed_by": user, "time_closed": utc_now_iso()}).eq("order_id", str(order_id)).execute()
-    clear_fast_cache()
+    try:
+        supabase.table("special_orders").update({"status": "Closed", "closed_by": user, "time_closed": utc_now_iso()}).eq("order_id", str(order_id)).execute()
+        clear_fast_cache()
+    except Exception as e:
+        pass
 
 def complete_expected_order(exp_id, user):
     st.session_state["hidden_e"].append(str(exp_id))
-    supabase.table("expected_orders").update({"status": "Closed", "closed_by": user, "time_closed": utc_now_iso()}).eq("exp_id", str(exp_id)).execute()
-    clear_fast_cache()
+    try:
+        supabase.table("expected_orders").update({"status": "Closed", "closed_by": user, "time_closed": utc_now_iso()}).eq("exp_id", str(exp_id)).execute()
+        clear_fast_cache()
+    except Exception as e:
+        pass
 
 def undo_action(item_id, item_type):
-    if item_type == "task":
-        if item_id in st.session_state["hidden_t"]: st.session_state["hidden_t"].remove(item_id)
-        supabase.table("tasks").update({"status": "Open", "closed_by": "", "time_closed": ""}).eq("task_id", str(item_id)).execute()
-    elif item_type == "oos":
-        if item_id in st.session_state["hidden_o"]: st.session_state["hidden_o"].remove(item_id)
-        supabase.table("oos").update({"status": "Open", "closed_by": "", "time_closed": ""}).eq("oos_id", str(item_id)).execute()
-    clear_fast_cache()
+    try:
+        if item_type == "task":
+            if item_id in st.session_state["hidden_t"]: st.session_state["hidden_t"].remove(item_id)
+            supabase.table("tasks").update({"status": "Open", "closed_by": "", "time_closed": ""}).eq("task_id", str(item_id)).execute()
+        elif item_type == "oos":
+            if item_id in st.session_state["hidden_o"]: st.session_state["hidden_o"].remove(item_id)
+            supabase.table("oos").update({"status": "Open", "closed_by": "", "time_closed": ""}).eq("oos_id", str(item_id)).execute()
+        clear_fast_cache()
+    except Exception as e:
+        pass
 
 def execute_omni_command(cmd, user, is_quick_key=False):
     cmd_l = cmd.lower()
@@ -302,14 +321,16 @@ def execute_omni_command(cmd, user, is_quick_key=False):
     if "receiving" in cmd_l or "bale" in cmd_l: zone = "Receiving"
 
     desc = cmd.strip().upper()
-    supabase.table("tasks").insert({
-        "task_id": gen_id(), "task_detail": desc, "status": "Open", "priority": pri, 
-        "zone": zone, "assigned_to": "Unassigned", "est_mins": 15, 
-        "time_submitted": utc_now_iso(), "closed_by": "", "time_closed": ""
-    }).execute()
-    
-    if not is_quick_key: st.toast(f"SYSTEM: Deploying '{desc}'", icon="⚙️")
-    clear_fast_cache()
+    try:
+        supabase.table("tasks").insert({
+            "task_id": gen_id(), "task_detail": desc, "status": "Open", "priority": pri, 
+            "zone": zone, "assigned_to": "Unassigned", "est_mins": 15, 
+            "time_submitted": utc_now_iso(), "closed_by": "", "time_closed": ""
+        }).execute()
+        if not is_quick_key: st.toast(f"SYSTEM: Deploying '{desc}'", icon="⚙️")
+        clear_fast_cache()
+    except Exception as e:
+        st.toast("Failed to dispatch command. Duplicate or DB error.", icon="❌")
 
 def load_daily_rhythm(grocery_pcs, frozen_pcs, staff_num, cph):
     hrs_math = (((grocery_pcs + frozen_pcs) / cph) / staff_num) * 60 if (grocery_pcs + frozen_pcs) > 0 else 120
@@ -341,30 +362,36 @@ def load_daily_rhythm(grocery_pcs, frozen_pcs, staff_num, cph):
         ds.append({"Task": "EDMONTON PROTOCOL: Salt Front Entrance", "Priority": "High", "Zone": "Outside", "Time": 10})
         ds.append({"Task": "EDMONTON PROTOCOL: Clear Snow from Back Stairs", "Priority": "High", "Zone": "Outside", "Time": 15})
     
-    task_inserts = []
+    # Loop over inserts individually so unique index duplicates don't crash the whole batch
     for d in ds:
-        task_inserts.append({
-            "task_id": gen_id(), "task_detail": d["Task"].upper(), "status": "Open", 
-            "priority": d["Priority"], "zone": d["Zone"], "assigned_to": "Unassigned", 
-            "est_mins": d["Time"], "time_submitted": utc_now_iso(), "closed_by": "", "time_closed": ""
-        })
-    if task_inserts: supabase.table("tasks").insert(task_inserts).execute()
-    
-    exp_inserts = []
+        try:
+            supabase.table("tasks").insert({
+                "task_id": gen_id(), "task_detail": d["Task"].upper(), "status": "Open", 
+                "priority": d["Priority"], "zone": d["Zone"], "assigned_to": "Unassigned", 
+                "est_mins": d["Time"], "time_submitted": utc_now_iso(), "closed_by": "", "time_closed": ""
+            }).execute()
+        except Exception:
+            pass # Skips any item that violates the unique DB index
+            
     for v in VENDOR_SCHEDULE.get(curr_day, []):
-        exp_inserts.append({
-            "exp_id": gen_id(), "vendor": v.upper(), "expected_day": curr_day, 
-            "status": "Pending", "logged_by": "AUTO", "closed_by": "", "time_closed": ""
-        })
-    if exp_inserts: supabase.table("expected_orders").insert(exp_inserts).execute()
-                    
+        try:
+            supabase.table("expected_orders").insert({
+                "exp_id": gen_id(), "vendor": v.upper(), "expected_day": curr_day, 
+                "status": "Pending", "logged_by": "AUTO", "closed_by": "", "time_closed": ""
+            }).execute()
+        except Exception:
+            pass
+
     st.toast("Rhythm Loaded", icon="📅")
     clear_fast_cache()
 
 def update_setting(name, value):
-    supabase.table("settings").delete().eq("setting_name", name).execute()
-    supabase.table("settings").insert({"setting_name": name, "setting_value": str(value)}).execute()
-    clear_full_cache()
+    try:
+        supabase.table("settings").delete().eq("setting_name", name).execute()
+        supabase.table("settings").insert({"setting_name": name, "setting_value": str(value)}).execute()
+        clear_full_cache()
+    except Exception:
+        pass
 
 # -------------------------
 # SIDEBAR OPERATIONAL CONTROLS (HIDDEN IN CS MODE)
@@ -404,13 +431,16 @@ if not is_cs_mode and not is_tv_settings_mode:
                     m_zone = st.selectbox("Zone", ["General"] + aisles)
                     m_time = st.number_input("Est. Mins", min_value=1, value=15)
                     if st.form_submit_button("Deploy Task") and m_task:
-                        supabase.table("tasks").insert({
-                            "task_id": gen_id(), "task_detail": m_task.strip().upper(), 
-                            "status": "Open", "priority": m_pri, "zone": m_zone, 
-                            "assigned_to": "Unassigned", "est_mins": m_time, 
-                            "time_submitted": utc_now_iso(), "closed_by": "", "time_closed": ""
-                        }).execute()
-                        clear_fast_cache()
+                        try:
+                            supabase.table("tasks").insert({
+                                "task_id": gen_id(), "task_detail": m_task.strip().upper(), 
+                                "status": "Open", "priority": m_pri, "zone": m_zone, 
+                                "assigned_to": "Unassigned", "est_mins": m_time, 
+                                "time_submitted": utc_now_iso(), "closed_by": "", "time_closed": ""
+                            }).execute()
+                            clear_fast_cache()
+                        except Exception:
+                            st.error("Failed to save task.")
 
             st.divider()
 
@@ -427,23 +457,32 @@ if not is_cs_mode and not is_tv_settings_mode:
                 with st.form("ticker_form", clear_on_submit=True):
                     t_msg = st.text_input("Broadcast Live Ticker Message")
                     if st.form_submit_button("Send to Ticker") and t_msg:
-                        supabase.table("ticker").insert({"msg_id": gen_id(), "message": html.escape(t_msg.strip().upper())}).execute()
-                        clear_full_cache()
-                        st.rerun()
+                        try:
+                            supabase.table("ticker").insert({"msg_id": gen_id(), "message": html.escape(t_msg.strip().upper())}).execute()
+                            clear_full_cache()
+                            st.rerun()
+                        except Exception:
+                            pass
 
             with st.expander("👥 Shift Roster Settings"):
                 selected_active = st.multiselect("Active Today:", master_staff, default=active_staff)
                 if st.button("Update Roster"):
-                    supabase.table("staff").update({"active": 0}).neq("name", "Unassigned").execute()
-                    if selected_active: supabase.table("staff").update({"active": 1}).in_("name", selected_active).execute()
-                    clear_full_cache()
-                    st.rerun()
+                    try:
+                        supabase.table("staff").update({"active": 0}).neq("name", "Unassigned").execute()
+                        if selected_active: supabase.table("staff").update({"active": 1}).in_("name", selected_active).execute()
+                        clear_full_cache()
+                        st.rerun()
+                    except Exception:
+                        pass
                 st.markdown("<hr style='margin: 10px 0; border-color: #1f3b5c;'>", unsafe_allow_html=True)
                 new_staff = st.text_input("Add New Team Member")
                 if st.button("Add to Database") and new_staff.strip():
-                    supabase.table("staff").insert({"name": new_staff.strip().title(), "active": 1}).execute()
-                    clear_full_cache()
-                    st.rerun()
+                    try:
+                        supabase.table("staff").insert({"name": new_staff.strip().title(), "active": 1}).execute()
+                        clear_full_cache()
+                        st.rerun()
+                    except Exception:
+                        pass
 
             with st.form("load_form"):
                 c_time1, c_time2 = st.columns(2)
@@ -455,10 +494,13 @@ if not is_cs_mode and not is_tv_settings_mode:
                 in_f = c2.number_input("Froz Pcs", min_value=0, value=f_pcs)
                 in_s = st.number_input("Active Staff", min_value=1, value=staff_count)
                 if st.form_submit_button("Calculate Labor"):
-                    supabase.table("counts").update({"grocery": in_g, "frozen": in_f, "staff": in_s, "last_update": utc_now_iso()}).eq("id", 1).execute()
-                    update_setting("Start_Time", in_arr.strftime("%H:%M"))
-                    update_setting("End_Time", in_end.strftime("%H:%M"))
-                    st.rerun()
+                    try:
+                        supabase.table("counts").update({"grocery": in_g, "frozen": in_f, "staff": in_s, "last_update": utc_now_iso()}).eq("id", 1).execute()
+                        update_setting("Start_Time", in_arr.strftime("%H:%M"))
+                        update_setting("End_Time", in_end.strftime("%H:%M"))
+                        st.rerun()
+                    except Exception:
+                        pass
 
             with st.form("oos_form", clear_on_submit=True):
                 o_z = st.selectbox("Log Shelf Holes", aisles[:8] + ["Freezer", "Bakery"])
@@ -466,23 +508,29 @@ if not is_cs_mode and not is_tv_settings_mode:
                 o_c = c1.number_input("Qty Holes", min_value=1, value=1)
                 o_n = c2.text_input("Notes")
                 if st.form_submit_button("Log OOS"):
-                    supabase.table("oos").insert({
-                        "oos_id": gen_id(), "zone": o_z, "hole_count": o_c, 
-                        "notes": o_n.strip().upper(), "status": "Open", 
-                        "logged_by": active_op, "time_logged": utc_now_iso(), "closed_by": "", "time_closed": ""
-                    }).execute()
-                    clear_fast_cache()
+                    try:
+                        supabase.table("oos").insert({
+                            "oos_id": gen_id(), "zone": o_z, "hole_count": o_c, 
+                            "notes": o_n.strip().upper(), "status": "Open", 
+                            "logged_by": active_op, "time_logged": utc_now_iso(), "closed_by": "", "time_closed": ""
+                        }).execute()
+                        clear_fast_cache()
+                    except Exception:
+                        pass
 
             with st.expander("🛠️ Advanced Loggers"):
                 with st.form("vendor_form", clear_on_submit=True):
                     e_ven = st.text_input("Log Expected Vendor")
                     if st.form_submit_button("Log") and e_ven:
-                        supabase.table("expected_orders").insert({
-                            "exp_id": gen_id(), "vendor": e_ven.strip().upper(), 
-                            "expected_day": yeg_now().strftime("%A"), "status": "Pending", 
-                            "logged_by": active_op, "closed_by": "", "time_closed": ""
-                        }).execute()
-                        clear_fast_cache()
+                        try:
+                            supabase.table("expected_orders").insert({
+                                "exp_id": gen_id(), "vendor": e_ven.strip().upper(), 
+                                "expected_day": yeg_now().strftime("%A"), "status": "Pending", 
+                                "logged_by": active_op, "closed_by": "", "time_closed": ""
+                            }).execute()
+                            clear_fast_cache()
+                        except Exception:
+                            pass
                 
                 new_prog = st.slider("Seasonal Changeover %", 0, 100, seasonal_progress, step=10)
                 if st.button("Update Tracker"):
@@ -523,51 +571,56 @@ if not is_cs_mode and not is_tv_settings_mode:
 
                 with st.expander("🗄️ Data Archival & Pruning"):
                     cutoff_30 = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
-                    old_tasks = to_df(supabase.table("tasks").select("*").in_("status", ["Closed", "Archived"]).lt("time_closed", cutoff_30).execute().data)
-                    old_oos = to_df(supabase.table("oos").select("*").in_("status", ["Closed", "Archived"]).lt("time_closed", cutoff_30).execute().data)
-                    
-                    if old_tasks.empty and old_oos.empty:
-                        st.info("No records older than 30 days found.")
-                    else:
-                        st.success(f"Found {len(old_tasks)} old tasks.")
-                        arch_buffer = io.BytesIO()
-                        with pd.ExcelWriter(arch_buffer, engine='openpyxl') as writer:
-                            if not old_tasks.empty: old_tasks.to_excel(writer, sheet_name='Archived_Tasks', index=False)
-                            if not old_oos.empty: old_oos.to_excel(writer, sheet_name='Archived_OOS', index=False)
-                        st.download_button("📥 1. Download Backup (Excel)", data=arch_buffer.getvalue(), file_name=f"TGP_Archive_{yeg_now().strftime('%Y%m%d')}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
-                        st.warning("Download backup before purging!")
-                        if st.button("🗑️ 2. Purge Database", type="primary", use_container_width=True):
-                            supabase.table("tasks").delete().in_("status", ["Closed", "Archived"]).lt("time_closed", cutoff_30).execute()
-                            supabase.table("oos").delete().in_("status", ["Closed", "Archived"]).lt("time_closed", cutoff_30).execute()
-                            st.rerun()
+                    try:
+                        old_tasks = to_df(supabase.table("tasks").select("*").in_("status", ["Closed", "Archived"]).lt("time_closed", cutoff_30).execute().data)
+                        old_oos = to_df(supabase.table("oos").select("*").in_("status", ["Closed", "Archived"]).lt("time_closed", cutoff_30).execute().data)
+                        
+                        if old_tasks.empty and old_oos.empty:
+                            st.info("No records older than 30 days found.")
+                        else:
+                            st.success(f"Found {len(old_tasks)} old tasks.")
+                            arch_buffer = io.BytesIO()
+                            with pd.ExcelWriter(arch_buffer, engine='openpyxl') as writer:
+                                if not old_tasks.empty: old_tasks.to_excel(writer, sheet_name='Archived_Tasks', index=False)
+                                if not old_oos.empty: old_oos.to_excel(writer, sheet_name='Archived_OOS', index=False)
+                            st.download_button("📥 1. Download Backup (Excel)", data=arch_buffer.getvalue(), file_name=f"TGP_Archive_{yeg_now().strftime('%Y%m%d')}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
+                            st.warning("Download backup before purging!")
+                            if st.button("🗑️ 2. Purge Database", type="primary", use_container_width=True):
+                                supabase.table("tasks").delete().in_("status", ["Closed", "Archived"]).lt("time_closed", cutoff_30).execute()
+                                supabase.table("oos").delete().in_("status", ["Closed", "Archived"]).lt("time_closed", cutoff_30).execute()
+                                st.rerun()
+                    except Exception:
+                        st.error("Failed to load archival data.")
 
                 with st.expander("🚨 Full Board Reset"):
                     if st.button("Execute EOD Sweep", type="primary"):
                         t_now = utc_now_iso()
-                        
-                        # 1. Archive Active Items as AUTO
-                        supabase.table("tasks").update({"status": "Archived", "closed_by": "AUTO", "time_closed": t_now}).eq("status", "Open").execute()
-                        supabase.table("oos").update({"status": "Archived", "closed_by": "AUTO", "time_closed": t_now}).eq("status", "Open").execute()
-                        supabase.table("special_orders").update({"status": "Archived", "closed_by": "AUTO", "time_closed": t_now}).eq("status", "Open").execute()
-                        supabase.table("expected_orders").update({"status": "Archived", "closed_by": "AUTO", "time_closed": t_now}).eq("status", "Pending").execute()
-                        
-                        # 2. Archive already closed items so they drop off the Audit Terminal
-                        supabase.table("tasks").update({"status": "Archived"}).eq("status", "Closed").execute()
-                        supabase.table("oos").update({"status": "Archived"}).eq("status", "Closed").execute()
-                        supabase.table("special_orders").update({"status": "Archived"}).eq("status", "Closed").execute()
-                        supabase.table("expected_orders").update({"status": "Archived"}).eq("status", "Closed").execute()
-                        
                         try:
-                            supabase.table("ticker").delete().neq("message", "xyz_impossible_match").execute()
+                            # 1. Archive Active Items as AUTO
+                            supabase.table("tasks").update({"status": "Archived", "closed_by": "AUTO", "time_closed": t_now}).eq("status", "Open").execute()
+                            supabase.table("oos").update({"status": "Archived", "closed_by": "AUTO", "time_closed": t_now}).eq("status", "Open").execute()
+                            supabase.table("special_orders").update({"status": "Archived", "closed_by": "AUTO", "time_closed": t_now}).eq("status", "Open").execute()
+                            supabase.table("expected_orders").update({"status": "Archived", "closed_by": "AUTO", "time_closed": t_now}).eq("status", "Pending").execute()
+                            
+                            # 2. Archive already closed items so they drop off the Audit Terminal
+                            supabase.table("tasks").update({"status": "Archived"}).eq("status", "Closed").execute()
+                            supabase.table("oos").update({"status": "Archived"}).eq("status", "Closed").execute()
+                            supabase.table("special_orders").update({"status": "Archived"}).eq("status", "Closed").execute()
+                            supabase.table("expected_orders").update({"status": "Archived"}).eq("status", "Closed").execute()
+                            
+                            try:
+                                supabase.table("ticker").delete().neq("message", "xyz_impossible_match").execute()
+                            except Exception:
+                                pass
+                            
+                            # Flush the Optimistic UI Memory Banks
+                            for key in ["hidden_t", "hidden_o", "hidden_s", "hidden_e"]:
+                                st.session_state[key] = []
+                                
+                            clear_full_cache()
+                            st.rerun()
                         except Exception:
                             pass
-                        
-                        # Flush the Optimistic UI Memory Banks
-                        for key in ["hidden_t", "hidden_o", "hidden_s", "hidden_e"]:
-                            st.session_state[key] = []
-                            
-                        clear_full_cache()
-                        st.rerun()
 
         render_sidebar_tools()
 
@@ -777,13 +830,13 @@ def render_main_board(fast_snap, is_tv):
                     c1, c2, c3 = st.columns([0.65, 0.20, 0.15], gap="small")
                     c1.markdown(card_html, unsafe_allow_html=True)
                     
-                    # BUG 2 FIX: Safely merge and strip all duplicate names out of the drop-down menu so Streamlit doesn't crash
+                    # Safely merge and strip all duplicate names out of the drop-down menu so Streamlit doesn't crash
                     base_opts = []
-                    for x in ["Unassigned", "ALL STAFF"] + active_staff + [r['assigned_to']]:
+                    for x in ["Unassigned", "ALL STAFF"] + active_staff + [str(r['assigned_to'])]:
                         if x not in base_opts:
                             base_opts.append(x)
                             
-                    c2.selectbox("Assign", base_opts, index=base_opts.index(r['assigned_to']), key=f"sel_{r['task_id']}", label_visibility="collapsed", on_change=assign_task, args=(r['task_id'], f"sel_{r['task_id']}"))
+                    c2.selectbox("Assign", base_opts, index=base_opts.index(str(r['assigned_to'])), key=f"sel_{r['task_id']}", label_visibility="collapsed", on_change=assign_task, args=(r['task_id'], f"sel_{r['task_id']}"))
                     c3.button("DONE", key=f"dn_{r['task_id']}", on_click=complete_task, args=(r['task_id'], active_op))
 
         st.markdown("<div class='sect-header' style='margin-top: 20px;'>Live Audit Terminal (Failsafe)</div>", unsafe_allow_html=True)
