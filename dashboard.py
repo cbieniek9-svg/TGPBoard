@@ -71,6 +71,9 @@ is_tv_url_mode = is_flag_active("tvmode")
 is_tv_settings_mode = is_flag_active("settings")
 is_cs_mode = str(query_params.get("mode", "")).lower() in ["cs", "desk", "service"]
 
+# Define baseline auto-refresh state based on the URL
+should_auto_refresh = is_tv_url_mode
+
 # Native REST API Setup
 try:
     supabase: Client = create_client(st.secrets["SUPABASE_URL"], st.secrets["SUPABASE_KEY"])
@@ -251,10 +254,6 @@ div[data-testid="stVerticalBlock"] {{ gap: 0.4rem !important; }}
 /* BUTTONS */
 div[data-testid="stButton"] > button {{ border-radius: 20px; border: 1px solid #00e5ff; background: transparent; color: #00e5ff; font-weight: 700; width: 100%; padding: 0px 5px !important; min-height: 38px !important; letter-spacing: 2px; transition: all 0.2s; }}
 div[data-testid="stButton"] > button:hover {{ background: #00e5ff; color: #000; box-shadow: 0 0 10px rgba(0, 229, 255, 0.4); }}
-
-/* NEW VISIBLE TV SETTINGS BUTTON */
-.tv-scale-btn {{ display: block; width: 100%; text-align: center; background: transparent; color: #ffaa00; border: 1px solid #ffaa00; padding: 6px 5px; border-radius: 20px; text-decoration: none; font-weight: 700; letter-spacing: 2px; transition: all 0.2s; margin-top: 5px; }}
-.tv-scale-btn:hover {{ background: #ffaa00; color: #000; box-shadow: 0 0 10px rgba(255, 170, 0, 0.4); }}
 </style>
 """, unsafe_allow_html=True)
 
@@ -399,14 +398,15 @@ def update_setting(name, value):
 # -------------------------
 # SIDEBAR OPERATIONAL CONTROLS (HIDDEN IN CS MODE)
 # -------------------------
-if not is_cs_mode and not is_tv_settings_mode:
+if not is_cs_mode and not is_tv_settings_mode and not st.session_state.get("force_tv_settings", False):
     with st.sidebar:
         conn_color = "#00ff00" if (datetime.now().second % 10) < 5 else "#00cc00"
         st.markdown(f"<div style='display:flex; align-items:center;'><div style='width:10px;height:10px;border-radius:50%;background-color:{conn_color};margin-right:10px;box-shadow:0 0 8px {conn_color};'></div><div style='color:#00e5ff; font-weight:300; letter-spacing:3px; font-size: 18px;'>UPLINK ACTIVE</div></div>", unsafe_allow_html=True)
         st.markdown("<br>", unsafe_allow_html=True)
         
         tv_toggle = st.toggle("📺 Local TV Display Mode", key="tv_toggle")
-        should_auto_refresh = is_tv_url_mode or tv_toggle
+        if tv_toggle:
+            should_auto_refresh = True
 
         active_op = st.selectbox("Operator:", PREMIUM_STAFF)
 
@@ -681,11 +681,11 @@ def render_tv_settings():
     c1, c2 = st.columns(2)
     if c1.button("✅ Save & Return to Board", type="primary", use_container_width=True):
         update_setting("TV_Scale", new_scale)
-        if "settings" in st.query_params: del st.query_params["settings"]
+        st.session_state["force_tv_settings"] = False
         st.rerun()
         
     if c2.button("❌ Cancel", use_container_width=True):
-        if "settings" in st.query_params: del st.query_params["settings"]
+        st.session_state["force_tv_settings"] = False
         st.rerun()
 
 # -------------------------
@@ -890,9 +890,6 @@ def render_main_board(fast_snap, is_tv):
             if st.button("🚀 Load Daily Rhythm", use_container_width=True):
                 load_daily_rhythm(g, f, staff_count, cases_per_hour)
                 st.rerun()
-        else:
-            # THIS BUTTON ONLY SHOWS UP IN TV MODE
-            st.markdown("<a href='/?tvmode=true&settings=true' target='_top' class='tv-scale-btn'>⚙️ ADJUST TV SCALE</a>", unsafe_allow_html=True)
 
     tk_df = slow_data["ticker"]
     if not tk_df.empty:
@@ -905,7 +902,7 @@ def render_main_board(fast_snap, is_tv):
 # JS INJECTIONS (TV SCROLL)
 # -------------------------
 # Completely block auto-scroll if the TV settings menu is open or in CS mode
-if is_tv_url_mode and not is_tv_settings_mode and not is_cs_mode:
+if is_tv_url_mode and not is_tv_settings_mode and not is_cs_mode and not st.session_state.get("force_tv_settings", False):
     st.markdown("""
     <script>
     const scrollApp = () => {
@@ -925,7 +922,7 @@ if is_tv_url_mode and not is_tv_settings_mode and not is_cs_mode:
 # -------------------------
 if is_cs_mode:
     render_cs_desk()
-elif is_tv_settings_mode:
+elif is_tv_settings_mode or st.session_state.get("force_tv_settings", False):
     render_tv_settings()
 elif st.session_state.get("show_analytics", False):
     render_analytics()
@@ -934,7 +931,17 @@ else:
         @st.fragment(run_every=4)
         def tv_loop():
             render_main_board(load_fast_data(), is_tv=True)
+        
         tv_loop()
+        
+        # PLACED OUTSIDE THE AUTO-REFRESH FRAGMENT SO IT NEVER DISAPPEARS MID-CLICK
+        if is_tv_url_mode:
+            st.markdown("<hr style='border-color: #1f3b5c; margin-top: 50px;'>", unsafe_allow_html=True)
+            c1, c2, c3 = st.columns([0.3, 0.4, 0.3])
+            with c2:
+                if st.button("⚙️ ADJUST TV SCALE ⚙️", use_container_width=True):
+                    st.session_state["force_tv_settings"] = True
+                    st.rerun()
     else:
         @st.fragment(run_every=10)
         def interactive_loop():
