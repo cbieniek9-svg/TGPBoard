@@ -70,8 +70,8 @@ div[data-testid="stVerticalBlock"] {{ gap: 0.4rem !important; }}
 .header-time {{ color: #88ccff; font-size: 1.3em; font-weight: 400; margin: 0; letter-spacing: 2px; }}
 
 /* SECRET TV ADMIN CORNER */
-.secret-tv-btn {{ position: absolute; left: 0; bottom: -4px; width: 60px; height: 20px; z-index: 99999; cursor: pointer; border-radius: 10px 0 0 10px; display: flex; align-items: center; justify-content: center; text-decoration: none; }}
-.secret-tv-btn::after {{ content: '⚙️'; font-size: 12px; opacity: 0; transition: opacity 0.2s; }}
+.secret-tv-btn {{ position: absolute; left: 0; bottom: -4px; width: 80px; height: 30px; z-index: 999999; cursor: pointer; border-radius: 10px 0 0 10px; display: flex; align-items: center; justify-content: center; text-decoration: none; pointer-events: all !important; }}
+.secret-tv-btn::after {{ content: '⚙️'; font-size: 14px; opacity: 0; transition: opacity 0.2s; pointer-events: none; }}
 .secret-tv-btn:hover {{ background: rgba(255, 255, 255, 0.4); }}
 .secret-tv-btn:hover::after {{ opacity: 1; }}
 
@@ -135,10 +135,19 @@ PREMIUM_STAFF = ["Chris", "Ashley", "Luke", "Chandler"]
 ORDER_LOCATIONS = ["1", "2", "3", "22"]
 aisles = ["Aisle 1", "Aisle 2", "Aisle 3", "Aisle 4", "Aisle 5", "Aisle 6", "Aisle 7", "Aisle 8", "Receiving", "Freezer", "Bakery", "Outside"]
 
+# Robust URL parameter parsing
 query_params = st.query_params
-is_tv_url_mode = "tvmode" in query_params or str(query_params.get("tvmode", "")).lower() in ["true", "1", "yes"]
+
+def is_flag_active(key):
+    """Returns True if the key exists in the URL, unless explicitly set to false/0/no"""
+    if key in query_params:
+        val = str(query_params.get(key, "")).lower()
+        return val not in ["false", "0", "no"]
+    return False
+
+is_tv_url_mode = is_flag_active("tvmode")
+is_tv_settings_mode = is_flag_active("settings")
 is_cs_mode = str(query_params.get("mode", "")).lower() in ["cs", "desk", "service"]
-is_tv_settings_mode = "settings" in query_params or str(query_params.get("settings", "")).lower() in ["true", "1", "yes"]
 
 # Native REST API Setup
 try:
@@ -692,7 +701,7 @@ def render_main_board(fast_snap, is_tv):
         st.progress(seasonal_progress / 100.0, text=f"Seasonal Changeover Progress: {seasonal_progress}%")
 
     # THE SECRET TV MENU BUTTON IS EMBEDDED DIRECTLY OVER THE ORANGE BAR HERE
-    tv_secret_html = "<a href='/?tvmode=true&settings=true' target='_self' class='secret-tv-btn' title='Open TV Settings'></a>" if is_tv else ""
+    tv_secret_html = "<a href='?tvmode=true&settings=true' target='_self' class='secret-tv-btn' title='Open TV Settings'></a>" if is_tv else ""
 
     st.markdown(f"<div class='header-bar'>{tv_secret_html}<div class='header-title'>TGP CENTRE STORE // {curr_now.strftime('%A')}</div><div class='header-time'>{curr_now.strftime('%b %d, %Y')} | {curr_now.strftime('%H:%M')}</div></div>", unsafe_allow_html=True)
 
@@ -767,9 +776,14 @@ def render_main_board(fast_snap, is_tv):
                 else:
                     c1, c2, c3 = st.columns([0.65, 0.20, 0.15], gap="small")
                     c1.markdown(card_html, unsafe_allow_html=True)
-                    opts = ["Unassigned", "ALL STAFF"] + active_staff
-                    if r['assigned_to'] not in opts: opts.append(r['assigned_to'])
-                    c2.selectbox("Assign", opts, index=opts.index(r['assigned_to']), key=f"sel_{r['task_id']}", label_visibility="collapsed", on_change=assign_task, args=(r['task_id'], f"sel_{r['task_id']}"))
+                    
+                    # BUG 2 FIX: Safely merge and strip all duplicate names out of the drop-down menu so Streamlit doesn't crash
+                    base_opts = []
+                    for x in ["Unassigned", "ALL STAFF"] + active_staff + [r['assigned_to']]:
+                        if x not in base_opts:
+                            base_opts.append(x)
+                            
+                    c2.selectbox("Assign", base_opts, index=base_opts.index(r['assigned_to']), key=f"sel_{r['task_id']}", label_visibility="collapsed", on_change=assign_task, args=(r['task_id'], f"sel_{r['task_id']}"))
                     c3.button("DONE", key=f"dn_{r['task_id']}", on_click=complete_task, args=(r['task_id'], active_op))
 
         st.markdown("<div class='sect-header' style='margin-top: 20px;'>Live Audit Terminal (Failsafe)</div>", unsafe_allow_html=True)
