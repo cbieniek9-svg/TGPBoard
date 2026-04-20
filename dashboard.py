@@ -70,9 +70,10 @@ div[data-testid="stVerticalBlock"] {{ gap: 0.4rem !important; }}
 .header-time {{ color: #88ccff; font-size: 1.3em; font-weight: 400; margin: 0; letter-spacing: 2px; }}
 
 /* BULLETPROOF TV SETTINGS BUTTON */
-.secret-tv-btn {{ position: fixed; top: 15px; left: 15px; width: 45px; height: 45px; z-index: 9999999; cursor: pointer; display: flex; align-items: center; justify-content: center; text-decoration: none; background: rgba(31, 59, 92, 0.8); border: 2px solid #00e5ff; border-radius: 10px; opacity: 0.3; transition: all 0.3s ease-in-out; box-shadow: 0 0 10px rgba(0, 0, 0, 0.5); }}
-.secret-tv-btn::after {{ content: '⚙️'; font-size: 22px; }}
-.secret-tv-btn:hover {{ opacity: 1; background: rgba(0, 229, 255, 0.2); transform: scale(1.05); }}
+.secret-tv-btn {{ position: absolute; left: 0; bottom: -4px; width: 60px; height: 40px; z-index: 999999; cursor: pointer; display: flex; align-items: center; justify-content: center; text-decoration: none; background: transparent; border-radius: 10px 0 0 10px; }}
+.secret-tv-btn::after {{ content: '⚙️'; font-size: 20px; opacity: 0.15; transition: opacity 0.2s; }}
+.secret-tv-btn:hover {{ background: rgba(255, 255, 255, 0.2); }}
+.secret-tv-btn:hover::after {{ opacity: 1; }}
 
 /* SHIFT NOTES & ALERTS */
 .alert-banner {{ background: #ff3333; color: #ffffff; padding: 10px 20px; font-weight: bold; border-radius: 5px; margin-bottom: 15px; border-left: 10px solid #990000; letter-spacing: 2px; }}
@@ -161,68 +162,87 @@ def to_df(data):
     return df
 
 # -------------------------
-# FRAGMENTED CACHING (REST API)
+# DATA FETCHING (100% LIVE, NO CACHE)
 # -------------------------
-@st.cache_data(ttl=2)
 def load_fast_data():
-    """Polls high-volatility tables via REST with strict lowercase columns."""
-    tasks = to_df(supabase.table("tasks").select("*").eq("status", "Open").execute().data)
-    oos = to_df(supabase.table("oos").select("*").eq("status", "Open").execute().data)
-    orders = to_df(supabase.table("special_orders").select("*").eq("status", "Open").execute().data)
-    expected = to_df(supabase.table("expected_orders").select("*").eq("status", "Pending").execute().data)
+    """Polls high-volatility tables via REST WITHOUT CACHE to ensure multi-device sync."""
+    try:
+        tasks = to_df(supabase.table("tasks").select("*").eq("status", "Open").execute().data)
+        oos = to_df(supabase.table("oos").select("*").eq("status", "Open").execute().data)
+        orders = to_df(supabase.table("special_orders").select("*").eq("status", "Open").execute().data)
+        expected = to_df(supabase.table("expected_orders").select("*").eq("status", "Pending").execute().data)
 
-    t_res = supabase.table("tasks").select("task_id, task_detail, time_closed, closed_by").eq("status", "Closed").neq("closed_by", "AUTO").order("time_closed", desc=True).limit(6).execute()
-    o_res = supabase.table("oos").select("oos_id, zone, time_closed, closed_by").eq("status", "Closed").neq("closed_by", "AUTO").order("time_closed", desc=True).limit(6).execute()
-    
-    audits = []
-    for t in t_res.data:
-        if t.get("time_closed"): audits.append({"id": t.get("task_id"), "event": f"Task: {t.get('task_detail')}", "time": t.get("time_closed"), "user": t.get("closed_by"), "type": "task"})
-    for o in o_res.data:
-        if o.get("time_closed"): audits.append({"id": o.get("oos_id"), "event": f"Cleared Holes: {o.get('zone')}", "time": o.get("time_closed"), "user": o.get("closed_by"), "type": "oos"})
-    
-    a_df = pd.DataFrame(audits)
-    if not a_df.empty: a_df = a_df.sort_values(by="time", ascending=False).head(6)
+        t_res = supabase.table("tasks").select("task_id, task_detail, time_closed, closed_by").eq("status", "Closed").neq("closed_by", "AUTO").order("time_closed", desc=True).limit(6).execute()
+        o_res = supabase.table("oos").select("oos_id, zone, time_closed, closed_by").eq("status", "Closed").neq("closed_by", "AUTO").order("time_closed", desc=True).limit(6).execute()
+        
+        audits = []
+        for t in t_res.data:
+            if t.get("time_closed"): audits.append({"id": t.get("task_id"), "event": f"Task: {t.get('task_detail')}", "time": t.get("time_closed"), "user": t.get("closed_by"), "type": "task"})
+        for o in o_res.data:
+            if o.get("time_closed"): audits.append({"id": o.get("oos_id"), "event": f"Cleared Holes: {o.get('zone')}", "time": o.get("time_closed"), "user": o.get("closed_by"), "type": "oos"})
+        
+        a_df = pd.DataFrame(audits)
+        if not a_df.empty: a_df = a_df.sort_values(by="time", ascending=False).head(6)
 
-    return {"tasks": tasks, "oos": oos, "orders": orders, "expected": expected, "audit": a_df}
+        return {"tasks": tasks, "oos": oos, "orders": orders, "expected": expected, "audit": a_df, "connection_error": False}
+    except Exception as e:
+        # Failsafe: Return empty dataframes and trigger the reconnect warning instead of crashing
+        return {"tasks": pd.DataFrame(), "oos": pd.DataFrame(), "orders": pd.DataFrame(), "expected": pd.DataFrame(), "audit": pd.DataFrame(), "connection_error": True}
 
 @st.cache_data(ttl=30)
 def load_slow_data():
     """Polls low-volatility tables."""
-    return {
-        "counts": to_df(supabase.table("counts").select("*").eq("id", 1).execute().data),
-        "staff": to_df(supabase.table("staff").select("*").execute().data),
-        "settings": to_df(supabase.table("settings").select("*").execute().data),
-        "ticker": to_df(supabase.table("ticker").select("*").execute().data)
-    }
+    try:
+        return {
+            "counts": to_df(supabase.table("counts").select("*").eq("id", 1).execute().data),
+            "staff": to_df(supabase.table("staff").select("*").execute().data),
+            "settings": to_df(supabase.table("settings").select("*").execute().data),
+            "ticker": to_df(supabase.table("ticker").select("*").execute().data)
+        }
+    except Exception:
+        return {"counts": pd.DataFrame(), "staff": pd.DataFrame(), "settings": pd.DataFrame(), "ticker": pd.DataFrame()}
 
 def load_historical_data(target_date_str=None):
-    if target_date_str:
-        start_iso = f"{target_date_str}T00:00:00Z"
-        end_iso = f"{target_date_str}T23:59:59Z"
-        tasks = to_df(supabase.table("tasks").select("*").in_("status", ["Closed", "Archived"]).gte("time_closed", start_iso).lte("time_closed", end_iso).execute().data)
-        oos = to_df(supabase.table("oos").select("*").in_("status", ["Closed", "Archived"]).gte("time_closed", start_iso).lte("time_closed", end_iso).execute().data)
-    else:
-        cutoff = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
-        tasks = to_df(supabase.table("tasks").select("*").in_("status", ["Closed", "Archived"]).gte("time_closed", cutoff).execute().data)
-        oos = to_df(supabase.table("oos").select("*").in_("status", ["Closed", "Archived"]).gte("time_closed", cutoff).execute().data)
-    
+    """Loads historical tasks with robust Edmonton-to-UTC timezone conversions."""
+    try:
+        if target_date_str:
+            dt_obj = datetime.strptime(target_date_str, "%Y-%m-%d")
+            if hasattr(LOCAL_TZ, 'localize'):
+                start_local = LOCAL_TZ.localize(dt_obj)
+            else:
+                start_local = dt_obj.replace(tzinfo=LOCAL_TZ)
+                
+            end_local = start_local + timedelta(days=1, seconds=-1)
+            start_iso = start_local.astimezone(timezone.utc).isoformat()
+            end_iso = end_local.astimezone(timezone.utc).isoformat()
+            
+            tasks = to_df(supabase.table("tasks").select("*").in_("status", ["Closed", "Archived"]).gte("time_closed", start_iso).lte("time_closed", end_iso).execute().data)
+            oos = to_df(supabase.table("oos").select("*").in_("status", ["Closed", "Archived"]).gte("time_closed", start_iso).lte("time_closed", end_iso).execute().data)
+        else:
+            cutoff = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
+            tasks = to_df(supabase.table("tasks").select("*").in_("status", ["Closed", "Archived"]).gte("time_closed", cutoff).execute().data)
+            oos = to_df(supabase.table("oos").select("*").in_("status", ["Closed", "Archived"]).gte("time_closed", cutoff).execute().data)
+    except Exception:
+        return {"tasks": pd.DataFrame(), "oos": pd.DataFrame()}
+        
     if not tasks.empty:
         tasks['time_submitted'] = pd.to_datetime(tasks['time_submitted'], errors='coerce')
         tasks['time_closed'] = pd.to_datetime(tasks['time_closed'], errors='coerce')
         tasks['actual_mins'] = (tasks['time_closed'] - tasks['time_submitted']).dt.total_seconds() / 60.0
     return {"tasks": tasks, "oos": oos}
 
-def clear_fast_cache(): load_fast_data.clear()
+def clear_fast_cache(): 
+    pass # Deprecated: Fast data is now 100% live
+    
 def clear_full_cache(): 
-    load_fast_data.clear()
     load_slow_data.clear()
 
 fast_data = load_fast_data()
 slow_data = load_slow_data()
 
-c_df = slow_data["counts"]
-staff_df = slow_data["staff"]
-set_df = slow_data["settings"]
+c_df = slow_data.get("counts", pd.DataFrame())
+staff_df = slow_data.get("staff", pd.DataFrame())
+set_df = slow_data.get("settings", pd.DataFrame())
 
 g_pcs = int(c_df["grocery"].iloc[0]) if not c_df.empty else 0
 f_pcs = int(c_df["frozen"].iloc[0]) if not c_df.empty else 0
@@ -259,7 +279,6 @@ def assign_task(task_id, widget_key):
     staff = st.session_state.get(widget_key, "Unassigned")
     try:
         supabase.table("tasks").update({"assigned_to": str(staff)}).eq("task_id", str(task_id)).execute()
-        clear_fast_cache()
     except Exception as e:
         st.toast(f"Database blocked assignment to '{staff}'. Check your Staff table.", icon="🛑")
 
@@ -267,7 +286,6 @@ def complete_task(task_id, user):
     st.session_state["hidden_t"].append(str(task_id)) 
     try:
         supabase.table("tasks").update({"status": "Closed", "closed_by": user, "time_closed": utc_now_iso()}).eq("task_id", str(task_id)).execute()
-        clear_fast_cache()
     except Exception as e:
         pass
 
@@ -275,7 +293,6 @@ def complete_oos(oos_id, user):
     st.session_state["hidden_o"].append(str(oos_id))
     try:
         supabase.table("oos").update({"status": "Closed", "closed_by": user, "time_closed": utc_now_iso()}).eq("oos_id", str(oos_id)).execute()
-        clear_fast_cache()
     except Exception as e:
         pass
 
@@ -283,7 +300,6 @@ def complete_special_order(order_id, user):
     st.session_state["hidden_s"].append(str(order_id))
     try:
         supabase.table("special_orders").update({"status": "Closed", "closed_by": user, "time_closed": utc_now_iso()}).eq("order_id", str(order_id)).execute()
-        clear_fast_cache()
     except Exception as e:
         pass
 
@@ -291,7 +307,6 @@ def complete_expected_order(exp_id, user):
     st.session_state["hidden_e"].append(str(exp_id))
     try:
         supabase.table("expected_orders").update({"status": "Closed", "closed_by": user, "time_closed": utc_now_iso()}).eq("exp_id", str(exp_id)).execute()
-        clear_fast_cache()
     except Exception as e:
         pass
 
@@ -303,7 +318,6 @@ def undo_action(item_id, item_type):
         elif item_type == "oos":
             if item_id in st.session_state["hidden_o"]: st.session_state["hidden_o"].remove(item_id)
             supabase.table("oos").update({"status": "Open", "closed_by": "", "time_closed": ""}).eq("oos_id", str(item_id)).execute()
-        clear_fast_cache()
     except Exception as e:
         pass
 
@@ -326,7 +340,6 @@ def execute_omni_command(cmd, user, is_quick_key=False):
             "time_submitted": utc_now_iso(), "closed_by": "", "time_closed": ""
         }).execute()
         if not is_quick_key: st.toast(f"SYSTEM: Deploying '{desc}'", icon="⚙️")
-        clear_fast_cache()
     except Exception as e:
         st.toast("Failed to dispatch command. Duplicate or DB error.", icon="❌")
 
@@ -381,7 +394,6 @@ def load_daily_rhythm(grocery_pcs, frozen_pcs, staff_num, cph):
             pass
 
     st.toast("Rhythm Loaded", icon="📅")
-    clear_fast_cache()
 
 def update_setting(name, value):
     try:
@@ -409,7 +421,6 @@ if not is_cs_mode and not is_tv_settings_mode:
         def render_sidebar_tools():
             if not should_auto_refresh and not st.session_state.get("show_analytics", False):
                 if st.button("🔄 Force Sync Now"):
-                    clear_fast_cache()
                     st.rerun() 
 
             with st.form("omni_form", clear_on_submit=True):
@@ -436,7 +447,6 @@ if not is_cs_mode and not is_tv_settings_mode:
                                 "assigned_to": "Unassigned", "est_mins": m_time, 
                                 "time_submitted": utc_now_iso(), "closed_by": "", "time_closed": ""
                             }).execute()
-                            clear_fast_cache()
                         except Exception:
                             st.error("Failed to save task.")
 
@@ -512,7 +522,6 @@ if not is_cs_mode and not is_tv_settings_mode:
                             "notes": o_n.strip().upper(), "status": "Open", 
                             "logged_by": active_op, "time_logged": utc_now_iso(), "closed_by": "", "time_closed": ""
                         }).execute()
-                        clear_fast_cache()
                     except Exception:
                         pass
 
@@ -526,7 +535,6 @@ if not is_cs_mode and not is_tv_settings_mode:
                                 "expected_day": yeg_now().strftime("%A"), "status": "Pending", 
                                 "logged_by": active_op, "closed_by": "", "time_closed": ""
                             }).execute()
-                            clear_fast_cache()
                         except Exception:
                             pass
                 
@@ -723,11 +731,15 @@ def render_analytics():
 # BOARD RENDER LAYER 
 # -------------------------
 def render_main_board(fast_snap, is_tv):
-    t_df = fast_snap["tasks"].copy()
-    oos_df = fast_snap["oos"].copy()
-    s_df = fast_snap["orders"].copy()
-    e_df = fast_snap["expected"].copy()
-    a_df = fast_snap["audit"].copy()
+    # Check for critical connection errors before rendering
+    if fast_snap.get("connection_error", False):
+        st.markdown("<div class='alert-banner'>📡 CONNECTION LOST: Retrying database uplink...</div>", unsafe_allow_html=True)
+        
+    t_df = fast_snap.get("tasks", pd.DataFrame()).copy()
+    oos_df = fast_snap.get("oos", pd.DataFrame()).copy()
+    s_df = fast_snap.get("orders", pd.DataFrame()).copy()
+    e_df = fast_snap.get("expected", pd.DataFrame()).copy()
+    a_df = fast_snap.get("audit", pd.DataFrame()).copy()
     
     # OPTIMISTIC UI FILTER
     hidden_t = st.session_state.get("hidden_t", [])
@@ -752,7 +764,7 @@ def render_main_board(fast_snap, is_tv):
         st.progress(seasonal_progress / 100.0, text=f"Seasonal Changeover Progress: {seasonal_progress}%")
 
     # THE SECRET TV MENU BUTTON IS EMBEDDED DIRECTLY OVER THE ORANGE BAR HERE
-    tv_secret_html = "<a href='/?tvmode=true&settings=true' target='_top' class='secret-tv-btn' title='Open TV Settings'></a>" if is_tv else ""
+    tv_secret_html = "<a href='?tvmode=true&settings=true' target='_self' class='secret-tv-btn' title='Open TV Settings'></a>" if is_tv else ""
 
     st.markdown(f"<div class='header-bar'>{tv_secret_html}<div class='header-title'>TGP CENTRE STORE // {curr_now.strftime('%A')}</div><div class='header-time'>{curr_now.strftime('%b %d, %Y')} | {curr_now.strftime('%H:%M')}</div></div>", unsafe_allow_html=True)
 
@@ -889,7 +901,7 @@ def render_main_board(fast_snap, is_tv):
                 load_daily_rhythm(g, f, staff_count, cases_per_hour)
                 st.rerun()
 
-    tk_df = slow_data["ticker"]
+    tk_df = slow_data.get("ticker", pd.DataFrame())
     if not tk_df.empty:
         live_tk = tk_df.dropna(subset=["message"])
         if not live_tk.empty:
