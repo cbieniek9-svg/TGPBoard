@@ -441,7 +441,7 @@ def execute_omni_command(cmd: str, user: str, is_quick_key: bool = False) -> Non
     except Exception as e:
         err_str = str(e)
         if "23505" in err_str or "idx_tasks_unique_open" in err_str:
-            st.toast(f"⚠️ '{desc}' is already active.", icon="⚠️")
+            st.toast(f"⚠️ '{desc}' is already active on the board.", icon="⚠️")
         else:
             _log_error(f"execute_omni_command('{desc}')", e)
             st.toast("❌ Failed to dispatch command.", icon="❌")
@@ -1182,6 +1182,17 @@ if is_tv_url_mode and not is_tv_settings_mode and not is_cs_mode and not st.sess
     """, unsafe_allow_html=True)
 
 # -------------------------
+# FRAGMENTS (Defined globally for stable IDs)
+# -------------------------
+@st.fragment(run_every=4)
+def tv_loop():
+    render_main_board(load_fast_data(), is_tv=True)
+
+@st.fragment(run_every=10)
+def interactive_loop():
+    render_main_board(load_fast_data(), is_tv=False)
+
+# -------------------------
 # ENTRYPOINT
 # -------------------------
 if is_cs_mode:
@@ -1192,9 +1203,6 @@ elif st.session_state.get("show_analytics", False):
     render_analytics()
 else:
     if st.session_state["should_auto_refresh"]:
-        @st.fragment(run_every=4)
-        def tv_loop():
-            render_main_board(load_fast_data(), is_tv=True)
         tv_loop()
 
         if is_tv_url_mode:
@@ -1205,7 +1213,4 @@ else:
                     st.session_state["force_tv_settings"] = True
                     st.rerun()
     else:
-        @st.fragment(run_every=10)
-        def interactive_loop():
-            render_main_board(load_fast_data(), is_tv=False)
         interactive_loop()
