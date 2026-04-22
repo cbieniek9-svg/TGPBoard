@@ -1,10 +1,11 @@
 import streamlit as st
 import pandas as pd
 import uuid
-import hashlib
 import html
 import io
 import logging
+import traceback
+import bcrypt
 from datetime import datetime, timedelta, timezone
 from supabase import create_client, Client
 
@@ -34,7 +35,13 @@ def gen_id() -> str:
     return uuid.uuid4().hex
 
 def hash_pin(pin: str) -> str:
-    return hashlib.sha256(str(pin).encode()).hexdigest()
+    return bcrypt.hashpw(str(pin).encode(), bcrypt.gensalt()).decode()
+
+def verify_pin(pin: str, hashed: str) -> bool:
+    try:
+        return bcrypt.checkpw(str(pin).encode(), hashed.encode())
+    except Exception:
+        return False
 
 # -------------------------
 # CONSTANTS
@@ -72,10 +79,10 @@ if "write_errors" not in st.session_state:
     st.session_state["write_errors"] = []
 
 # -------------------------
-# ERROR TRACKING
+# ERROR TRACKING & VALIDATION
 # -------------------------
 def _log_error(context: str, exc: Exception) -> None:
-    msg = f"[{utc_now_iso()}] {context}: {exc}"
+    msg = f"[{utc_now_iso()}] {context}: {exc}\n{traceback.format_exc()}"
     logger.error(msg)
     st.session_state["write_errors"].append(msg)
     if len(st.session_state["write_errors"]) > 20:
@@ -86,6 +93,25 @@ def _safe_remove(lst: list, value: str) -> None:
         lst.remove(value)
     except ValueError:
         pass
+
+def sanitize_input(text: str, max_len: int = 500, allow_empty: bool = False) -> str:
+    text = str(text).strip()
+    if not allow_empty and not text:
+        raise ValueError("Input cannot be empty")
+    if len(text) > max_len:
+        raise ValueError(f"Input exceeds {max_len} characters (got {len(text)})")
+    return html.escape(text)
+
+def validate_integer(value, min_val: int = 0, max_val: int = None) -> int:
+    try:
+        val = int(value)
+        if val < min_val:
+            raise ValueError(f"Value must be >= {min_val}")
+        if max_val and val > max_val:
+            raise ValueError(f"Value must be <= {max_val}")
+        return val
+    except (ValueError, TypeError) as e:
+        raise ValueError(f"Invalid integer: {e}")
 
 # -------------------------
 # URL FLAGS
@@ -409,8 +435,10 @@ def undo_action(item_id: str, item_type: str) -> None:
 
 
 def execute_omni_command(cmd: str, user: str, is_quick_key: bool = False) -> None:
-    cmd_l = cmd.lower().strip()
-    if not cmd_l:
+    try:
+        cmd_l = sanitize_input(cmd, max_len=300, allow_empty=False).lower()
+    except ValueError as e:
+        st.toast(f"❌ Invalid command: {e}", icon="❌")
         return
 
     if any(w in cmd_l for w in PRIORITY_URGENT_WORDS):
@@ -428,7 +456,7 @@ def execute_omni_command(cmd: str, user: str, is_quick_key: bool = False) -> Non
     if "receiving" in cmd_l or "bale" in cmd_l:
         zone = "Receiving"
 
-    desc = cmd.strip().upper()
+    desc = cmd_l.upper()
     try:
         supabase.table("tasks").insert({
             "task_id": gen_id(), "task_detail": desc, "status": "Open",
@@ -576,21 +604,25 @@ if not is_cs_mode and not is_tv_settings_mode and not st.session_state.get("forc
                     m_task = st.text_input("Task Description")
                     m_pri  = st.selectbox("Priority", ["Routine", "High", "Urgent"])
                     m_zone = st.selectbox("Zone", ["General"] + AISLES)
-                    m_time = st.number_input("Est. Mins", min_value=1, value=15)
-                    if st.form_submit_button("Deploy Task") and m_task.strip():
+                    m_time = st.number_input("Est. Mins", min_value=1, value=15, max_value=480)
+                    if st.form_submit_button("Deploy Task"):
                         try:
+                            task_desc = sanitize_input(m_task, max_len=300)
+                            est_mins = validate_integer(m_time, min_val=1, max_val=480)
                             supabase.table("tasks").insert({
-                                "task_id": gen_id(), "task_detail": m_task.strip().upper(),
+                                "task_id": gen_id(), "task_detail": task_desc.upper(),
                                 "status": "Open", "priority": m_pri, "zone": m_zone,
-                                "assigned_to": "Unassigned", "est_mins": m_time,
+                                "assigned_to": "Unassigned", "est_mins": est_mins,
                                 "time_submitted": utc_now_iso(), "closed_by": "", "time_closed": None,
                             }).execute()
                             clear_fast_cache()
                             st.toast("Task deployed.", icon="✅")
+                        except ValueError as e:
+                            st.error(f"❌ {e}")
                         except Exception as e:
                             err_str = str(e)
                             if "23505" in err_str or "idx_tasks_unique_open" in err_str:
-                                st.warning(f"Task '{m_task.strip().upper()}' is already active.")
+                                st.warning(f"Task is already active.")
                             else:
                                 _log_error("manual task insert", e)
                                 st.error("Failed to save task.")
@@ -707,17 +739,22 @@ if not is_cs_mode and not is_tv_settings_mode and not st.session_state.get("forc
             # --- ADMIN CONSOLE ---
             st.divider()
             st.markdown("### 🔒 SYSTEM ADMIN")
-            admin_pass = st.text_input("Admin PIN", type="password")
 
-            pin_entered  = admin_pass != ""
-            pin_correct  = pin_entered and (hash_pin(admin_pass) == admin_pin_hash)
-            admin_open   = (admin_pin_hash == "") or pin_correct
+            if not admin_pin_hash:
+                st.warning("⚠️ Admin PIN not configured. Cannot access admin panel.")
+                st.info("Set Admin_PIN in database settings first.")
+            else:
+                admin_pass = st.text_input("Admin PIN", type="password")
+                pin_entered = admin_pass != ""
+                pin_correct = pin_entered and verify_pin(admin_pass, admin_pin_hash)
+                admin_open = pin_correct
 
-            if admin_open:
-                if admin_pin_hash == "":
-                    st.info("ℹ️ No PIN set — admin open. Set Admin_PIN in settings to lock.")
-                else:
-                    st.success("Admin Unlocked")
+                if not pin_entered:
+                    st.caption("Enter PIN to unlock admin panel")
+                elif not pin_correct:
+                    st.error("❌ Incorrect PIN")
+                elif admin_open:
+                    st.success("✅ Admin Unlocked")
 
                 if st.button(
                     "⬅️ Close Analytics" if st.session_state.get("show_analytics", False) else "📈 Launch Analytics",
@@ -835,26 +872,31 @@ def render_cs_desk() -> None:
         submit    = st.form_submit_button("SEND TO FLOOR 🚀", use_container_width=True)
 
         if submit:
-            if c_name.strip() and c_item.strip() and cs_rep.strip():
-                try:
-                    supabase.table("special_orders").insert({
-                        "order_id":    gen_id(),
-                        "customer":    c_name.strip().upper(),
-                        "item":        c_item.strip().upper(),
-                        "contact":     c_contact.strip().upper(),
-                        "location":    c_loc,
-                        "status":      "Open",
-                        "logged_by":   cs_rep.strip().upper(),
-                        "time_logged": utc_now_iso(),
-                        "closed_by":   "",
-                        "time_closed": None,
-                    }).execute()
-                    st.success(f"✅ Order for {html.escape(c_name.strip())} has been sent to the floor!")
-                except Exception as e:
-                    _log_error("cs_order insert", e)
-                    st.error("Failed to send order. Check connection.")
-            else:
-                st.warning("⚠️ Please fill out Customer Name, Item Description, and Your Name.")
+            try:
+                c_name_val = sanitize_input(c_name, max_len=100)
+                c_item_val = sanitize_input(c_item, max_len=200)
+                cs_rep_val = sanitize_input(cs_rep, max_len=100)
+                c_contact_val = sanitize_input(c_contact, max_len=100, allow_empty=True)
+
+                supabase.table("special_orders").insert({
+                    "order_id":    gen_id(),
+                    "customer":    c_name_val.upper(),
+                    "item":        c_item_val.upper(),
+                    "contact":     c_contact_val.upper(),
+                    "location":    c_loc,
+                    "status":      "Open",
+                    "logged_by":   cs_rep_val.upper(),
+                    "time_logged": utc_now_iso(),
+                    "closed_by":   "",
+                    "time_closed": None,
+                }).execute()
+                st.success(f"✅ Order has been sent to the floor!")
+                clear_fast_cache()
+            except ValueError as e:
+                st.error(f"❌ {e}")
+            except Exception as e:
+                _log_error("cs_order insert", e)
+                st.error("Failed to send order. Check connection.")
 
 # -------------------------
 # TV SETTINGS MENU
